@@ -1,0 +1,725 @@
+openapi: 3.0.0
+info:
+  title: Financial Assistant API
+  description: API for financial assistant with OCR and expense management capabilities
+  version: 1.0.0
+servers:
+  - url: https://api.moniagent.com/v1
+    description: Production server
+  - url: https://staging-api.moniagent.com/v1
+    description: Staging server
+
+paths:
+  /auth/register:
+    post:
+      summary: Register a new user
+      description: Creates a new user account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+                - first_name
+                - last_name
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User's email address
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                  description: User's password
+                first_name:
+                  type: string
+                  description: User's first name
+                last_name:
+                  type: string
+                  description: User's last name
+      responses:
+        '201':
+          description: User successfully registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    description: User's unique identifier
+                  email:
+                    type: string
+                    format: email
+                    description: User's email address
+                  first_name:
+                    type: string
+                    description: User's first name
+                  last_name:
+                    type: string
+                    description: User's last name
+                  created_at:
+                    type: string
+                    format: date-time
+                    description: Account creation timestamp
+        '400':
+          description: Invalid input
+        '409':
+          description: Email already exists
+
+  /auth/login:
+    post:
+      summary: User login
+      description: Authenticates a user and returns JWT token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User's email address
+                password:
+                  type: string
+                  format: password
+                  description: User's password
+      responses:
+        '200':
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    description: JWT access token
+                  token_type:
+                    type: string
+                    default: bearer
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid credentials
+
+  /invoices:
+    post:
+      summary: Upload and process an invoice
+      description: Uploads an invoice image and processes it using OCR
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Invoice image file (JPG, PNG, PDF)
+      responses:
+        '201':
+          description: Invoice processed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '400':
+          description: Invalid file format or processing error
+        '401':
+          description: Unauthorized
+
+  /invoices/{id}:
+    get:
+      summary: Get invoice details
+      description: Retrieves details of a specific invoice
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Invoice details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Invoice not found
+    put:
+      summary: Update invoice details
+      description: Updates extracted details for an invoice
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                store_name:
+                  type: string
+                date:
+                  type: string
+                  format: date
+                total_amount:
+                  type: number
+                user_confirmed:
+                  type: boolean
+      responses:
+        '200':
+          description: Invoice updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '400':
+          description: Invalid input
+        '401':
+          description: Unauthorized
+        '404':
+          description: Invoice not found
+
+  /expenses:
+    get:
+      summary: List user expenses
+      description: Retrieves a paginated list of user expenses
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: category_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of expenses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Expense'
+                  total:
+                    type: integer
+                    description: Total number of expenses matching criteria
+        '401':
+          description: Unauthorized
+    post:
+      summary: Create a manual expense
+      description: Creates an expense without an invoice
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - amount
+                - date
+                - category_id
+              properties:
+                amount:
+                  type: number
+                  description: Expense amount
+                date:
+                  type: string
+                  format: date
+                  description: Date of the expense
+                category_id:
+                  type: string
+                  format: uuid
+                  description: Category ID for the expense
+                description:
+                  type: string
+                  description: Optional description
+                store_name:
+                  type: string
+                  description: Name of the store/vendor
+      responses:
+        '201':
+          description: Expense created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+        '400':
+          description: Invalid input
+        '401':
+          description: Unauthorized
+
+  /expenses/{id}:
+    get:
+      summary: Get expense details
+      description: Retrieves details of a specific expense
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Expense details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Expense not found
+    put:
+      summary: Update expense details
+      description: Updates details of an existing expense
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Expense'
+      responses:
+        '200':
+          description: Expense updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+        '400':
+          description: Invalid input
+        '401':
+          description: Unauthorized
+        '404':
+          description: Expense not found
+    delete:
+      summary: Delete an expense
+      description: Removes an expense from the system
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Expense deleted successfully
+        '401':
+          description: Unauthorized
+        '404':
+          description: Expense not found
+
+  /categories:
+    get:
+      summary: List expense categories
+      description: Retrieves a list of user's expense categories
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Category'
+        '401':
+          description: Unauthorized
+    post:
+      summary: Create a new category
+      description: Creates a new expense category for the user
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  description: Name of the category
+                description:
+                  type: string
+                  description: Description of the category
+                color:
+                  type: string
+                  format: color
+                  description: Color code for UI
+                icon:
+                  type: string
+                  description: Icon identifier
+      responses:
+        '201':
+          description: Category created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '400':
+          description: Invalid input
+        '401':
+          description: Unauthorized
+
+  /budgets:
+    get:
+      summary: List user budgets
+      description: Retrieves a list of user's budgets
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of budgets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Budget'
+        '401':
+          description: Unauthorized
+    post:
+      summary: Create a new budget
+      description: Creates a new budget for a specific category
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - category_id
+                - budget_amount
+                - time_period
+              properties:
+                category_id:
+                  type: string
+                  format: uuid
+                  description: Category ID for the budget
+                budget_amount:
+                  type: number
+                  description: Amount allocated for this budget
+                time_period:
+                  type: string
+                  enum: [weekly, monthly, annually]
+                  description: Time period for budget
+                alert_threshold_percentage:
+                  type: integer
+                  minimum: 0
+                  maximum: 100
+                  default: 80
+                  description: Percentage of budget that triggers alert
+      responses:
+        '201':
+          description: Budget created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Budget'
+        '400':
+          description: Invalid input
+        '401':
+          description: Unauthorized
+
+  /ai-agent/categorize-expense:
+    post:
+      summary: AI categorization of an expense
+      description: Uses AI to suggest category for an expense based on store name and history
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - expense_id
+              properties:
+                expense_id:
+                  type: string
+                  format: uuid
+                  description: ID of the expense to categorize
+                store_name:
+                  type: string
+                  description: Name of the store for categorization
+      responses:
+        '200':
+          description: Category suggestion
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  expense_id:
+                    type: string
+                    format: uuid
+                  suggested_category:
+                    $ref: '#/components/schemas/Category'
+                  confidence:
+                    type: number
+                    description: Confidence score for the suggestion
+                  reason:
+                    type: string
+                    description: Reason for the categorization
+        '400':
+          description: Invalid input
+        '401':
+          description: Unauthorized
+
+  /ai-agent/financial-advice:
+    get:
+      summary: Get AI financial advice
+      description: Generates personalized financial advice based on user's spending patterns
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Financial advice
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  advice:
+                    type: string
+                    description: Financial advice content
+                  summary:
+                    type: string
+                    description: Brief summary of the advice
+                  recommendations:
+                    type: array
+                    items:
+                      type: string
+                      description: Specific recommendations
+        '401':
+          description: Unauthorized
+
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        first_name:
+          type: string
+        last_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        image_url:
+          type: string
+        store_name:
+          type: string
+        date:
+          type: string
+          format: date
+        total_amount:
+          type: number
+        extracted_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [pending, processed, failed, confirmed]
+        confidence_score:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Expense:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        invoice_id:
+          type: string
+          format: uuid
+        store_name:
+          type: string
+        date:
+          type: string
+          format: date
+        amount:
+          type: number
+        category_id:
+          type: string
+          format: uuid
+        description:
+          type: string
+        user_confirmed:
+          type: boolean
+        categorized_by_ai:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        color:
+          type: string
+        icon:
+          type: string
+        user_id:
+          type: string
+          format: uuid
+        is_system_category:
+          type: boolean
+        monthly_budget_limit:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Budget:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        category_id:
+          type: string
+          format: uuid
+        time_period:
+          type: string
+          enum: [weekly, monthly, annually]
+        budget_amount:
+          type: number
+        alert_threshold_percentage:
+          type: integer
+        current_spending:
+          type: number
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
