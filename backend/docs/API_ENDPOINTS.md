@@ -367,45 +367,127 @@ Authorization: Bearer <token>
 
 ---
 
-## AI Agent Endpoints
+## AI Agent & Chat Endpoints
 
-### Categorize Expense
+### Start Chat Session
 ```http
-POST /ai-agent/categorize-expense
+POST /chat/start
 Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "store_name": "Whole Foods",
-  "amount": 45.99,
-  "description": "Grocery shopping"
+  "session_title": "Monthly expense tracking"
 }
 ```
 
 **Response** (200 OK):
 ```json
 {
-  "suggested_category_id": "category-uuid",
-  "category_name": "Groceries",
-  "confidence": 0.92,
-  "alternative_categories": [
+  "session_id": "session-uuid",
+  "message": "Chat session started successfully",
+  "initial_message": "Hello! I'm your AI assistant for expense tracking. You can upload an invoice image or describe your expense. What would you like to do?"
+}
+```
+
+### Send Chat Message
+```http
+POST /chat/{session_id}/message
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "content": "I spent $25 on coffee at Starbucks today",
+  "message_type": "text"  (or "image" for receipt uploads)
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "message_id": "msg-uuid",
+  "response": "I found an expense: $25.00 at Starbucks. Is this correct?",
+  "extracted_expense": {
+    "merchant_name": "Starbucks",
+    "amount": 25.00,
+    "date": "2025-01-16",
+    "confidence": 0.95,
+    "description": "coffee"
+  },
+  "requires_confirmation": true,
+  "budget_warning": "You've spent $85 of your $100 Eating Out budget this week",
+  "advice": "Consider switching to home coffee to save $200-300 per month"
+}
+```
+
+### Confirm Expense from Chat
+```http
+POST /chat/{session_id}/confirm-expense
+Authorization: Bearer <token>
+
+Query Parameters:
+  ?expense_id=expense-uuid
+  &category_id=category-uuid  (optional)
+  &confirmed=true
+```
+
+### Get Chat Session History
+```http
+GET /chat/{session_id}/history
+Authorization: Bearer <token>
+```
+
+**Response** (200 OK):
+```json
+{
+  "session": {
+    "id": "session-uuid",
+    "user_id": "user-uuid",
+    "session_title": "Monthly expense tracking",
+    "status": "active",
+    "created_at": "2025-01-15T10:00:00Z",
+    "updated_at": "2025-01-15T10:30:00Z"
+  },
+  "messages": [
     {
-      "category_id": "uuid",
-      "category_name": "Shopping",
-      "confidence": 0.05
+      "id": "msg-uuid",
+      "session_id": "session-uuid",
+      "role": "user",
+      "content": "I spent $25 on coffee at Starbucks",
+      "created_at": "2025-01-15T10:15:00Z"
+    },
+    {
+      "id": "msg-uuid",
+      "session_id": "session-uuid",
+      "role": "assistant",
+      "content": "I extracted this expense information...",
+      "created_at": "2025-01-15T10:15:05Z"
     }
   ]
 }
 ```
 
+### Close Chat Session
+```http
+POST /chat/{session_id}/close
+Authorization: Bearer <token>
+```
+
+**Response** (200 OK):
+```json
+{
+  "status": "closed",
+  "session_id": "session-uuid",
+  "message": "Chat session closed"
+}
+```
+
 ### Get Financial Advice
 ```http
-GET /ai-agent/financial-advice
+GET /financial-advice
 Authorization: Bearer <token>
 
 Query Parameters:
-  ?period=monthly
-  ?category_id=uuid  (optional)
+  ?period=monthly  (daily, weekly, monthly)
 ```
 
 **Response** (200 OK):
