@@ -8,36 +8,31 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-# Use google-generativeai directly instead of langchain-google-genai
-import google.generativeai as genai
-
+from src.core.langgraph_agent import LangGraphAIAgent
 from src.services.expense_processing_service import ExpenseProcessingService
 from src.services.budget_management_service import BudgetManagementService
 from src.services.financial_advice_service import FinancialAdviceService
 from src.models.expense import Expense
 from src.models.chat_session import ChatSession, ChatMessage
 from src.utils.exceptions import ValidationError
-import os
 
 logger = logging.getLogger(__name__)
 
 
 class AIAgentService:
     """
-    Service for managing AI-powered expense tracking conversations
+    Service for managing AI-powered expense tracking conversations using LangGraph
     """
 
-    def __init__(self, db_session: Optional[Session] = None):
+    def __init__(self, db_session: Session = None):
         self.db_session = db_session
         self.expense_service = ExpenseProcessingService(db_session)
         self.budget_service = BudgetManagementService(db_session)
         self.advice_service = FinancialAdviceService()
+        self.langgraph_agent = None
 
-        # Initialize Google Generative AI
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if api_key:
-            genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        if db_session:
+            self.langgraph_agent = LangGraphAIAgent(db_session)
 
     def start_session(
         self, user_id: str, session_title: Optional[str] = None
@@ -83,9 +78,9 @@ class AIAgentService:
 
     def process_message(
         self, session_id: str, user_message: str, message_type: str = "text"
-    ) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str]]:
+    ) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """
-        Process a user message and generate a response
+        Process a user message using LangGraph AI agent and generate a response
 
         Args:
             session_id: Chat session ID
@@ -93,7 +88,7 @@ class AIAgentService:
             message_type: Type of message ('text' or 'image')
 
         Returns:
-            Tuple of (response_text, extracted_expense_data, budget_warning, advice)
+            Tuple of (response_text, extracted_expense_data, budget_warning, financial_advice)
         """
         try:
             if not self.db_session:
@@ -113,160 +108,31 @@ class AIAgentService:
             self.db_session.add(user_msg)
             self.db_session.commit()
 
-            # Extract expense information
-            extracted_expense = None
-            budget_warning = None
-            advice = None
-
-            if message_type == "text":
-                extracted_expense = self._extract_from_text(user_message)
-            elif message_type == "image":
-                extracted_expense = self._extract_from_image(user_message)
-
-            # Generate AI response
-            if message_type == "image" and not extracted_expense:
-                response_text = (
-                    "I couldn't read the image. Please upload a clear receipt "
-                    "photo in JPG or PNG format, showing amount and merchant."
-                )
-            else:
-                response_text = self._generate_response(user_message, extracted_expense)
+            # Process with LangGraph agent
+            result = self.langgraph_agent.run(
+                user_message=user_message,
+                user_id=session.user_id,
+                session_id=session_id,
+                message_type=message_type
+            )
 
             # Save AI response
             ai_msg = ChatMessage(
-                session_id=session_id, role="assistant", content=response_text
+                session_id=session_id, role="assistant", content=result["response"]
             )
             self.db_session.add(ai_msg)
             self.db_session.commit()
 
-            # If expense was extracted and valid, provide budget info and advice
-            if extracted_expense and self.expense_service.validate_extracted_expense(
-                extracted_expense
-            ):
-                # For now, we'll return the extracted info for user confirmation
-                pass
-
-            return response_text, extracted_expense, budget_warning, advice
+            return (
+                result["response"],
+                result.get("extracted_expense"),
+                result.get("budget_warning"),
+                result.get("financial_advice")
+            )
 
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
             raise
-
-    def _extract_from_text(self, text: str) -> Optional[Dict[str, Any]]:
-        """
-        Extract expense from text using AI
-
-        Args:
-            text: Text content
-
-        Returns:
-            Extracted expense data or None
-        """
-        try:
-            # Phase 6 optimization: try lightweight parser first
-            try:
-                fast_data = self.expense_service.extract_expense_from_text(text)
-                if fast_data and (fast_data.get("amount") or fast_data.get("merchant_name")):
-                    return fast_data
-            except Exception as fast_err:
-                logger.debug(
-                    f"Lightweight text extraction fallback due to: {fast_err}"
-                )
-
-            extraction_prompt = f"""Extract expense information from the following text. Return ONLY valid JSON.
-                
-Text: {text}
-
-Return JSON with these fields (use null for missing data):
-{{
-    "merchant_name": "string or null",
-    "amount": number or null,
-    "date": "YYYY-MM-DD or null",
-    "confidence": 0-1,
-    "description": "string or null"
-}}
-"""
-
-            response = self.model.generate_content(extraction_prompt)
-            response_text = response.text.strip()
-
-            # Clean up markdown if present
-            if "```json" in response_text:
-                response_text = (
-                    response_text.split("```json")[1].split("```")[0].strip()
-                )
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
-
-            extracted_data = json.loads(response_text)
-            return extracted_data
-
-        except Exception as e:
-            logger.warning(f"Failed to extract expense from text: {str(e)}")
-            return None
-
-    def _extract_from_image(self, image_path: str) -> Optional[Dict[str, Any]]:
-        """
-        Extract expense from image using OCR
-
-        Args:
-            image_path: Path to image file
-
-        Returns:
-            Extracted expense data or None
-        """
-        try:
-            if not image_path or not os.path.exists(image_path):
-                logger.warning(f"Image file not found: {image_path}")
-                return None
-            with open(image_path, "rb") as f:
-                return self.expense_service.extract_expense_from_image(f)
-        except Exception as e:
-            logger.warning(f"Failed to extract expense from image: {str(e)}")
-            return None
-
-    def _generate_response(
-        self, user_message: str, extracted_expense: Optional[Dict[str, Any]]
-    ) -> str:
-        """
-        Generate AI response using LLM
-
-        Args:
-            user_message: User message
-            extracted_expense: Extracted expense data if available
-
-        Returns:
-            AI response text
-        """
-        try:
-            if extracted_expense:
-                # Format extracted data for confirmation
-                amounts = extracted_expense.get("amounts")
-                if amounts and isinstance(amounts, list) and len(amounts) > 1:
-                    expense_text = (
-                        f"I found multiple amounts {amounts} in your message. "
-                        f"Please confirm which amount to record, or split into separate expenses."
-                    )
-                else:
-                    expense_text = (
-                        f"I found the following expense information:\n"
-                        f"- Merchant: {extracted_expense.get('merchant_name', 'Unknown')}\n"
-                        f"- Amount: ${extracted_expense.get('amount', 0):.2f}\n"
-                        f"- Date: {extracted_expense.get('date', 'Not specified')}\n"
-                        f"- Confidence: {extracted_expense.get('confidence', 0)*100:.0f}%\n\n"
-                        f"Is this correct? Please confirm or provide corrections."
-                    )
-                return expense_text
-            else:
-                # Generic response when no expense extracted: provide explicit guidance
-                return (
-                    "I couldn't extract expense details. Please include: amount (e.g., $12.50), "
-                    "merchant (e.g., Starbucks), and optional date (YYYY-MM-DD)."
-                )
-
-        except Exception as e:
-            logger.error(f"Error generating response: {str(e)}")
-            return "I had trouble understanding that. Could you please rephrase your expense?"
 
     def confirm_and_save_expense(
         self,
@@ -485,8 +351,9 @@ Return JSON with these fields (use null for missing data):
         try:
             logger.info(f"Handling correction request in session {session_id}")
 
-            # Use AI to parse the correction from user message
-            prompt = f"""
+            # With LangGraph implementation, we can use the agent's NLP capabilities
+            # to understand the correction request
+            correction_prompt = f"""
             The user wants to correct an expense. Parse their message and extract the corrections.
             
             User message: "{user_message}"
@@ -502,39 +369,60 @@ Return JSON with these fields (use null for missing data):
             If you cannot extract corrections, return: {{"error": "Could not understand corrections"}}
             """
 
-            response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
-
-            # Parse the JSON response
-            # Remove markdown code blocks if present
-            if "```json" in response_text:
-                response_text = (
-                    response_text.split("```json")[1].split("```")[0].strip()
+            # Use the LangGraph agent to process this request
+            if self.langgraph_agent:
+                from langchain_core.messages import HumanMessage
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                
+                # Initialize a temporary model for this specific task
+                temp_model = ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash",
+                    temperature=0.1
                 )
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
+                
+                response = temp_model.invoke([HumanMessage(content=correction_prompt)])
+                
+                # Parse the response
+                import json
+                import re
+                
+                response_text = response.content.strip()
+                
+                # Clean up markdown if present
+                if "```json" in response_text:
+                    response_text = (
+                        response_text.split("```json")[1].split("```")[0].strip()
+                    )
+                elif "```" in response_text:
+                    response_text = response_text.split("```")[1].split("```")[0].strip()
 
-            corrections = json.loads(response_text)
+                corrections = json.loads(response_text)
 
-            if "error" in corrections:
+                if "error" in corrections:
+                    return (
+                        "I'm not sure what you'd like to correct. Could you please specify "
+                        "which fields you want to change (merchant name, amount, or date)?",
+                        None,
+                    )
+
+                # Format confirmation message
+                response_parts = ["I understand you want to make these corrections:"]
+                if "merchant_name" in corrections:
+                    response_parts.append(f"• Merchant: {corrections['merchant_name']}")
+                if "amount" in corrections:
+                    response_parts.append(f"• Amount: ${corrections['amount']:.2f}")
+                if "date" in corrections:
+                    response_parts.append(f"• Date: {corrections['date']}")
+
+                response_parts.append("\nShould I apply these corrections?")
+
+                return "\n".join(response_parts), corrections
+            else:
+                # Fallback if langgraph agent is not available
                 return (
-                    "I'm not sure what you'd like to correct. Could you please specify "
-                    "which fields you want to change (merchant name, amount, or date)?",
+                    "I had trouble understanding your corrections. Please be specific about what needs to be changed.",
                     None,
                 )
-
-            # Format confirmation message
-            response_parts = ["I understand you want to make these corrections:"]
-            if "merchant_name" in corrections:
-                response_parts.append(f"• Merchant: {corrections['merchant_name']}")
-            if "amount" in corrections:
-                response_parts.append(f"• Amount: ${corrections['amount']:.2f}")
-            if "date" in corrections:
-                response_parts.append(f"• Date: {corrections['date']}")
-
-            response_parts.append("\nShould I apply these corrections?")
-
-            return "\n".join(response_parts), corrections
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse AI correction response: {str(e)}")
