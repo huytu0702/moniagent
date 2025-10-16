@@ -1,0 +1,387 @@
+openapi: 3.0.0
+info:
+  title: Expense Tracking AI Chat API
+  description: API for the AI-powered expense tracking chat interface
+  version: 1.0.0
+servers:
+  - url: https://api.example.com/v1
+    description: Production server
+  - url: https://staging-api.example.com/v1
+    description: Staging server
+
+paths:
+  /chat/start:
+    post:
+      summary: Start a new chat session with the AI agent
+      description: Creates a new chat session for the user to interact with the AI agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartChatRequest'
+      responses:
+        '201':
+          description: Chat session created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatSessionResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized access
+
+  /chat/{sessionId}/message:
+    post:
+      summary: Send a message to the AI agent
+      description: Send either text or image data to the AI agent for processing
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: The ID of the chat session
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChatMessageRequest'
+      responses:
+        '200':
+          description: Message processed and response returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMessageResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized access
+        '404':
+          description: Chat session not found
+
+  /expenses:
+    post:
+      summary: Create an expense record
+      description: Creates a new expense record after user confirmation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExpenseRequest'
+      responses:
+        '201':
+          description: Expense created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized access
+
+  /expenses/{expenseId}:
+    put:
+      summary: Update an expense record
+      description: Updates an expense record, typically after user correction
+      parameters:
+        - name: expenseId
+          in: path
+          required: true
+          description: The ID of the expense
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateExpenseRequest'
+      responses:
+        '200':
+          description: Expense updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpenseResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized access
+        '404':
+          description: Expense not found
+
+  /budgets/warnings:
+    post:
+      summary: Get budget warnings for an expense
+      description: Checks if adding an expense would exceed budget limits
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BudgetWarningRequest'
+      responses:
+        '200':
+          description: Budget status and warnings returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetWarningResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized access
+
+components:
+  schemas:
+    StartChatRequest:
+      type: object
+      properties:
+        sessionTitle:
+          type: string
+          description: Optional title for the chat session
+      example:
+        sessionTitle: "Expense tracking session"
+
+    ChatSessionResponse:
+      type: object
+      required:
+        - id
+        - title
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the chat session
+        title:
+          type: string
+          description: Title of the chat session
+        status:
+          type: string
+          enum: [active, completed, archived]
+          description: Current status of the chat session
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when the session was created
+
+    ChatMessageRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          description: Text content of the message (optional if image is provided)
+        image:
+          type: string
+          format: binary
+          description: Image file to process (optional if text is provided)
+        messageType:
+          type: string
+          enum: [text, image, confirmation, correction]
+          description: Type of message being sent
+
+    ChatMessageResponse:
+      type: object
+      required:
+        - responseText
+        - extractedData
+        - requiresConfirmation
+      properties:
+        responseText:
+          type: string
+          description: The AI agent's response to the user
+        extractedData:
+          $ref: '#/components/schemas/ExtractedExpenseData'
+        requiresConfirmation:
+          type: boolean
+          description: Whether the user needs to confirm the extracted data
+        budgetWarnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/BudgetWarning'
+        financialAdvice:
+          type: string
+          description: Any financial advice provided by the AI
+
+    ExtractedExpenseData:
+      type: object
+      properties:
+        amount:
+          type: number
+          format: decimal
+          description: Extracted price amount
+        merchantName:
+          type: string
+          description: Extracted location/restaurant name
+        expenseDate:
+          type: string
+          format: date
+          description: Extracted date (optional)
+        category:
+          type: string
+          description: Suggested expense category
+
+    CreateExpenseRequest:
+      type: object
+      required:
+        - amount
+        - merchantName
+        - categoryId
+      properties:
+        amount:
+          type: number
+          format: decimal
+          description: Expense amount
+        merchantName:
+          type: string
+          description: Name of the merchant/location
+        expenseDate:
+          type: string
+          format: date
+          description: Date of expense (optional)
+        categoryId:
+          type: string
+          format: uuid
+          description: ID of the expense category
+        sourceType:
+          type: string
+          enum: [image, text]
+          description: How the expense was input
+        sourceMetadata:
+          type: object
+          description: Additional metadata about the source
+        chatSessionId:
+          type: string
+          format: uuid
+          description: ID of the chat session where this was processed
+
+    UpdateExpenseRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+          format: decimal
+          description: Updated expense amount
+        merchantName:
+          type: string
+          description: Updated name of the merchant/location
+        expenseDate:
+          type: string
+          format: date
+          description: Updated date of expense (optional)
+
+    ExpenseResponse:
+      type: object
+      required:
+        - id
+        - amount
+        - merchantName
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the expense
+        amount:
+          type: number
+          format: decimal
+          description: Expense amount
+        merchantName:
+          type: string
+          description: Name of the merchant/location
+        expenseDate:
+          type: string
+          format: date
+          description: Date of expense (optional)
+        categoryId:
+          type: string
+          format: uuid
+          description: ID of the expense category
+        confirmedByUser:
+          type: boolean
+          description: Whether the user confirmed the expense details
+        sourceType:
+          type: string
+          enum: [image, text]
+          description: How the expense was input
+        sourceMetadata:
+          type: object
+          description: Additional metadata about the source
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when the expense was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: Timestamp when the expense was last updated
+
+    BudgetWarningRequest:
+      type: object
+      required:
+        - categoryId
+        - amount
+        - expenseDate
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+          description: ID of the expense category
+        amount:
+          type: number
+          format: decimal
+          description: Amount to check against budget
+        expenseDate:
+          type: string
+          format: date
+          description: Date of the expense to determine month
+
+    BudgetWarningResponse:
+      type: object
+      properties:
+        willExceedBudget:
+          type: boolean
+          description: Whether adding this expense will exceed the budget
+        currentSpending:
+          type: number
+          format: decimal
+          description: Amount already spent in this category for the month
+        budgetLimit:
+          type: number
+          format: decimal
+          description: Monthly budget limit for this category
+        remainingBudget:
+          type: number
+          format: decimal
+          description: Remaining budget for the month
+        financialAdvice:
+          type: string
+          description: Advice related to the budget status
+
+    BudgetWarning:
+      type: object
+      properties:
+        willExceedBudget:
+          type: boolean
+          description: Whether adding this expense will exceed the budget
+        category:
+          type: string
+          description: Name of the expense category
+        currentSpending:
+          type: number
+          format: decimal
+          description: Amount already spent in this category for the month
+        budgetLimit:
+          type: number
+          format: decimal
+          description: Monthly budget limit for this category

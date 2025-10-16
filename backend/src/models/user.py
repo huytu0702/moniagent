@@ -41,6 +41,12 @@ class User(Base):
     budgets = relationship(
         "Budget", back_populates="user", cascade="all, delete-orphan"
     )
+    chat_sessions = relationship(
+        "ChatSession", back_populates="user", cascade="all, delete-orphan"
+    )
+    expense_categories = relationship(
+        "ExpenseCategory", back_populates="user", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<User(id={self.id}, email={self.email})>"

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 from sqlalchemy.orm import Session
 from src.models.budget import Budget
-from src.models.category import Category
+from src.models.expense_category import ExpenseCategory
 from src.models.expense import Expense
 
 
@@ -26,8 +26,8 @@ class BudgetManagementService:
     Service for handling budget management operations
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, db_session: Session = None):
+        self.db_session = db_session
 
     def create_budget(
         self,
@@ -254,6 +254,106 @@ class BudgetManagementService:
             logger.error(f"Error deleting budget: {str(e)}")
             raise BudgetManagementServiceError(f"Failed to delete budget: {str(e)}")
 
+    def check_budget_status(
+        self,
+        user_id: str,
+        category_id: str,
+        amount: float = 0,
+        db_session: Session = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check the budget status for a user's category
+
+        Args:
+            user_id: ID of the user
+            category_id: ID of the category
+            amount: Amount to check against the budget
+            db_session: Database session
+
+        Returns:
+            Dictionary with budget information and warning if applicable
+        """
+        try:
+            logger.info(
+                f"Checking budget status for user {user_id}, category {category_id}"
+            )
+
+            # Use provided session or fall back to instance session
+            session_to_use = db_session or self.db_session
+            if not session_to_use:
+                raise BudgetManagementServiceError("Database session not available")
+
+            # Get the budget for this category
+            budget = (
+                session_to_use.query(Budget)
+                .filter(Budget.user_id == user_id, Budget.category_id == category_id)
+                .first()
+            )
+
+            if not budget:
+                return None
+
+            # Calculate current spending including the new amount
+            spent_amount = self._calculate_spent_amount(
+                user_id, category_id, budget.period, session_to_use
+            )
+
+            # Include the new expense amount for status check
+            total_with_new_expense = spent_amount + amount
+
+            # Calculate remaining amount
+            remaining = budget.limit_amount - total_with_new_expense
+
+            # Calculate percentage used
+            percentage_used = (
+                total_with_new_expense / budget.limit_amount
+                if budget.limit_amount > 0
+                else 0
+            )
+
+            # Check if we should issue a warning
+            warning = percentage_used >= budget.alert_threshold
+
+            # Get category name
+            expense_category = (
+                session_to_use.query(ExpenseCategory)
+                .filter(ExpenseCategory.id == category_id)
+                .first()
+            )
+            category_name = expense_category.name if expense_category else "Unknown"
+
+            return {
+                "category_id": category_id,
+                "category_name": category_name,
+                "limit": budget.limit_amount,
+                "spent": spent_amount,
+                "total_with_new_expense": total_with_new_expense,
+                "remaining": remaining,
+                "percentage_used": percentage_used,
+                "alert_threshold": budget.alert_threshold,
+                "warning": warning,
+                "alert_level": (
+                    "high"
+                    if percentage_used >= 1.0
+                    else "medium" if warning else "none"
+                ),
+                "message": (
+                    f"You have exceeded your budget for {category_name}!"
+                    if percentage_used >= 1.0
+                    else (
+                        f"You are approaching your budget limit for {category_name}."
+                        if warning
+                        else None
+                    )
+                ),
+            }
+
+        except Exception as e:
+            logger.error(f"Error checking budget status: {str(e)}")
+            raise BudgetManagementServiceError(
+                f"Failed to check budget status: {str(e)}"
+            )
+
     def _calculate_spent_amount(
         self,
         user_id: str,
@@ -304,7 +404,7 @@ class BudgetManagementService:
                     db_session.query(Expense)
                     .filter(
                         Expense.user_id == user_id,
-                        Expense.category == category_id,
+                        Expense.category_id == category_id,
                         Expense.date >= start_date,
                         Expense.date <= end_date,
                     )

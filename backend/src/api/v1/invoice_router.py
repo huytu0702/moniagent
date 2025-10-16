@@ -6,7 +6,7 @@ from typing import List
 from fastapi import APIRouter, File, UploadFile, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from src.api.schemas.invoice import InvoiceResponse, InvoiceListResponse
-from src.services.invoice_service import InvoiceService
+from src.services.invoice_service import InvoiceService, InvoiceServiceError
 from src.core.database import get_db
 from src.core.security import get_current_user
 from src.models.user import User
@@ -49,12 +49,12 @@ async def process_invoice(
             status=result['status']
         )
     
-    except ValueError as e:
+    except (ValueError, InvoiceServiceError) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

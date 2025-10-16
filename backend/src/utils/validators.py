@@ -44,8 +44,17 @@ def validate_email(email: str) -> str:
     Raises:
         ValidationError: If email is invalid
     """
-    email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    if not email or not isinstance(email, str):
+        raise ValidationError("Email is required and must be a string")
+
     email = email.strip().lower()
+
+    # Check for double dots which are invalid
+    if ".." in email:
+        raise ValidationError("Invalid email format")
+
+    # Basic email pattern
+    email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
 
     if not re.match(email_pattern, email):
         raise ValidationError("Invalid email format")
@@ -216,9 +225,17 @@ def validate_date_string(date_string: str) -> str:
     Raises:
         ValidationError: If format is invalid
     """
+    from datetime import datetime
+
     date_pattern = r"^\d{4}-\d{2}-\d{2}$"
 
     if not re.match(date_pattern, date_string):
         raise ValidationError("Date must be in format YYYY-MM-DD")
+
+    # Validate that it's an actual valid date (including leap year checks)
+    try:
+        datetime.strptime(date_string, "%Y-%m-%d")
+    except ValueError:
+        raise ValidationError(f"Invalid date: {date_string}")
 
     return date_string

@@ -81,7 +81,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         # In production, this would fetch from database
         user = type('User', (), {'id': user_id})()
         return user
-    except jwt.JWTError:
+    except jwt.PyJWTError:
         raise credentials_exception
 
 

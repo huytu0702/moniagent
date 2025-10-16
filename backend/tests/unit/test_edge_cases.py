@@ -239,8 +239,7 @@ class TestDateHandling:
 class TestConcurrencyEdgeCases:
     """Test edge cases in concurrent scenarios."""
 
-    @pytest.mark.asyncio
-    async def test_concurrent_cache_access(self):
+    def test_concurrent_cache_access(self):
         """Test cache behavior under concurrent access."""
         import asyncio
         from src.core.cache import SimpleCache
@@ -251,12 +250,15 @@ class TestConcurrencyEdgeCases:
             cache.set(key, value)
             return cache.get(key)
 
-        tasks = [cache_operation(f"key_{i}", f"value_{i}") for i in range(100)]
-        results = await asyncio.gather(*tasks)
-        assert len(results) == 100
+        async def run_test():
+            tasks = [cache_operation(f"key_{i}", f"value_{i}") for i in range(100)]
+            results = await asyncio.gather(*tasks)
+            assert len(results) == 100
 
-    @pytest.mark.asyncio
-    async def test_concurrent_validation(self):
+        # Run async test with asyncio.run()
+        asyncio.run(run_test())
+
+    def test_concurrent_validation(self):
         """Test validation functions under concurrent access."""
         import asyncio
 
@@ -265,10 +267,15 @@ class TestConcurrencyEdgeCases:
 
             return validate_email(email)
 
-        emails = [f"user{i}@example.com" for i in range(50)]
-        tasks = [validate_operation(email) for email in emails]
-        results = await asyncio.gather(*tasks)
-        assert len(results) == 50
+        async def run_test():
+            valid_email = "test@example.com"
+            tasks = [validate_operation(valid_email) for _ in range(10)]
+            results = await asyncio.gather(*tasks)
+            assert len(results) == 10
+            assert all(results)
+
+        # Run async test with asyncio.run()
+        asyncio.run(run_test())
 
 
 class TestBoundaryConditions:

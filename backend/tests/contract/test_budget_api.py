@@ -34,7 +34,9 @@ def auth_headers():
 def test_create_budget_endpoint_structure(client, auth_headers):
     """Test the structure of the create budget endpoint"""
 
-    with patch('src.api.v1.budget_router.BudgetManagementService') as mock_service_class:
+    with patch(
+        "src.api.v1.budget_router.BudgetManagementService"
+    ) as mock_service_class:
         mock_instance = mock_service_class.return_value
         mock_instance.create_budget.return_value = {
             "id": "budget-1",
@@ -82,7 +84,9 @@ def test_create_budget_endpoint_structure(client, auth_headers):
 def test_get_budgets_endpoint_structure(client, auth_headers):
     """Test the structure of the get budgets endpoint"""
 
-    with patch('src.api.v1.budget_router.BudgetManagementService') as mock_service_class:
+    with patch(
+        "src.api.v1.budget_router.BudgetManagementService"
+    ) as mock_service_class:
         mock_instance = mock_service_class.return_value
         mock_instance.get_user_budgets.return_value = [
             {
@@ -120,7 +124,9 @@ def test_get_budgets_endpoint_structure(client, auth_headers):
 def test_get_spending_summary_endpoint_structure(client, auth_headers):
     """Test the structure of the get spending summary endpoint"""
 
-    with patch('src.api.v1.budget_router.ExpenseAggregationService') as mock_service_class:
+    with patch(
+        "src.api.v1.budget_router.ExpenseAggregationService"
+    ) as mock_service_class:
         mock_instance = mock_service_class.return_value
         mock_instance.get_spending_summary.return_value = {
             "period": "monthly",
@@ -159,7 +165,9 @@ def test_get_spending_summary_endpoint_structure(client, auth_headers):
 def test_get_financial_advice_endpoint_structure(client, auth_headers):
     """Test the structure of the get financial advice endpoint"""
 
-    with patch('src.api.v1.ai_agent_router.FinancialAdviceService') as mock_service_class:
+    with patch(
+        "src.api.v1.ai_agent_router.FinancialAdviceService"
+    ) as mock_service_class:
         mock_instance = mock_service_class.return_value
         mock_instance.get_financial_advice.return_value = {
             "advice": "You are spending 33% of your budget on dining. Consider reducing to save more.",
@@ -187,7 +195,9 @@ def test_get_financial_advice_endpoint_structure(client, auth_headers):
 def test_missing_required_fields_in_budget_creation(client, auth_headers):
     """Test that missing required fields returns error"""
 
-    with patch('src.api.v1.budget_router.BudgetManagementService') as mock_service_class:
+    with patch(
+        "src.api.v1.budget_router.BudgetManagementService"
+    ) as mock_service_class:
         mock_instance = mock_service_class.return_value
         mock_instance.create_budget.side_effect = ValueError(
             "Missing required field: category_id"
@@ -204,3 +214,91 @@ def test_missing_required_fields_in_budget_creation(client, auth_headers):
 
         # Should fail validation
         assert response.status_code in [400, 422]
+
+
+def test_budget_warnings_endpoint_structure(client, auth_headers):
+    """Test the structure of the budget warnings endpoint"""
+
+    with patch(
+        "src.api.v1.budget_router.BudgetManagementService"
+    ) as mock_service_class:
+        mock_instance = mock_service_class.return_value
+        mock_instance.check_budget_alerts.return_value = [
+            {
+                "budget_id": "budget-1",
+                "category_name": "Eating Out",
+                "limit_amount": 500.0,
+                "spent_amount": 450.0,
+                "remaining_amount": 50.0,
+                "alert_level": "warning",
+                "message": "You are approaching your budget limit for Eating Out.",
+            }
+        ]
+
+        response = client.get(
+            "/api/v1/budgets/alerts",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        response_data = response.json()
+
+        # Verify response is a list
+        assert isinstance(response_data, list)
+
+        if len(response_data) > 0:
+            # Verify first item structure
+            alert = response_data[0]
+            assert "budget_id" in alert
+            assert "category_name" in alert
+            assert "limit_amount" in alert
+            assert "spent_amount" in alert
+            assert "alert_level" in alert
+            assert "message" in alert
+
+            # Verify data types
+            assert isinstance(alert["limit_amount"], (int, float))
+            assert isinstance(alert["spent_amount"], (int, float))
+            assert isinstance(alert["alert_level"], str)
+
+
+def test_budget_status_check_endpoint(client, auth_headers):
+    """Test checking budget status for a specific category"""
+
+    with patch(
+        "src.api.v1.budget_router.BudgetManagementService"
+    ) as mock_service_class:
+        mock_instance = mock_service_class.return_value
+        mock_instance.check_budget_status.return_value = {
+            "category_id": "cat-1",
+            "category_name": "Eating Out",
+            "limit": 500.0,
+            "spent": 400.0,
+            "total_with_new_expense": 450.0,
+            "remaining": 50.0,
+            "percentage_used": 0.9,
+            "alert_threshold": 0.8,
+            "warning": True,
+            "alert_level": "medium",
+            "message": "You are approaching your budget limit for Eating Out.",
+        }
+
+        response = client.get(
+            "/api/v1/budgets/check/cat-1?amount=50",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        response_data = response.json()
+
+        # Verify response structure
+        assert "category_id" in response_data
+        assert "category_name" in response_data
+        assert "limit" in response_data
+        assert "spent" in response_data
+        assert "warning" in response_data
+
+        # Verify data types
+        assert isinstance(response_data["limit"], (int, float))
+        assert isinstance(response_data["spent"], (int, float))
+        assert isinstance(response_data["warning"], bool)

@@ -5,7 +5,7 @@ Expense model
 from datetime import datetime
 from typing import Optional
 from uuid import uuid4
-from sqlalchemy import Column, String, DateTime, Float, Text, ForeignKey
+from sqlalchemy import Column, String, DateTime, Float, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from src.core.database import Base
 
@@ -18,24 +18,29 @@ class Expense(Base):
     invoice_id = Column(
         String, ForeignKey("invoices.id"), nullable=True
     )  # Can be null if not from invoice
+    category_id = Column(String, ForeignKey("expense_categories.id"), nullable=True)
     description = Column(Text, nullable=True)
+    merchant_name = Column(String, nullable=True)  # Name of location/restaurant
     amount = Column(Float, nullable=False)
-    category = Column(String, nullable=True)  # Will be set by categorization service
     date = Column(DateTime, nullable=True)  # Date of expense
+    confirmed_by_user = Column(
+        Boolean, default=False
+    )  # Whether user confirmed extracted info
+    source_type = Column(String, nullable=True)  # "image" or "text"
+    source_metadata = Column(Text, nullable=True)  # JSON metadata about source
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     user = relationship("User", back_populates="expenses")
     invoice = relationship("Invoice", back_populates="expenses")
+    category = relationship("ExpenseCategory", back_populates="expenses")
     categorization_feedbacks = relationship(
         "CategorizationFeedback", back_populates="expense", cascade="all, delete-orphan"
     )
 
     def __repr__(self):
-        return (
-            f"<Expense(id={self.id}, amount={self.amount}, category={self.category})>"
-        )
+        return f"<Expense(id={self.id}, amount={self.amount}, merchant_name={self.merchant_name})>"
 
     def to_dict(self):
         """Convert the expense to a dictionary representation"""
@@ -43,10 +48,13 @@ class Expense(Base):
             "id": self.id,
             "user_id": self.user_id,
             "invoice_id": self.invoice_id,
+            "category_id": self.category_id,
             "description": self.description,
+            "merchant_name": self.merchant_name,
             "amount": self.amount,
-            "category": self.category,
             "date": self.date.isoformat() if self.date else None,
+            "confirmed_by_user": self.confirmed_by_user,
+            "source_type": self.source_type,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

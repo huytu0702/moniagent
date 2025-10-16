@@ -17,7 +17,7 @@ class Budget(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
-    category_id = Column(String, ForeignKey("categories.id"), nullable=False)
+    category_id = Column(String, ForeignKey("expense_categories.id"), nullable=False)
     limit_amount = Column(Float, nullable=False)  # Monthly/weekly limit
     period = Column(String, default="monthly")  # 'monthly', 'weekly', 'yearly'
     alert_threshold = Column(
@@ -28,7 +28,7 @@ class Budget(Base):
 
     # Relationships
     user = relationship("User", back_populates="budgets")
-    category = relationship("Category", back_populates="budgets")
+    category = relationship("ExpenseCategory", back_populates="budgets")
 
     def __repr__(self):
         return f"<Budget(id={self.id}, user_id={self.user_id}, category_id={self.category_id}, limit_amount={self.limit_amount})>"

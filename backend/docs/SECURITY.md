@@ -356,6 +356,21 @@ This document outlines security best practices and hardening measures for the Fi
 
 ---
 
+## Phase 6 Penetration Testing Checklist
+
+- [ ] Fuzz chat endpoints with malformed JSON and oversized payloads
+- [ ] Attempt SSRF via image URLs (not supported; ensure rejection)
+- [ ] Verify upload validation (content-type, file signature, size limits)
+- [ ] Enumerate auth: rate-limit login and protected routes
+- [ ] Check error messages for leakage (stack traces, SQL info)
+- [ ] Verify RLS and resource ownership checks on invoices/expenses
+- [ ] Test JWT tampering (alg=none, wrong secret)
+- [ ] Confirm AI prompt inputs are sanitized/logged without PII
+
+See also: DEPENDENCY_AUDIT.md for dependency risk notes.
+
+---
+
 ## Security Incident Response
 
 ### Reporting Security Issues
