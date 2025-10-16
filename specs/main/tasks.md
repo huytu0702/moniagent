@@ -143,14 +143,14 @@ description: "Task list for Financial Assistant with OCR and Expense Management"
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T049 [P] Documentation updates in backend/docs/ and update quickstart.md
-- [ ] T050 Code cleanup and refactoring across all modules
-- [ ] T051 Performance optimization for OCR processing and AI interactions
-- [ ] T052 [P] Additional unit tests (if needed) in backend/tests/unit/
-- [ ] T053 Security hardening for financial data handling
-- [ ] T054 Run quickstart.md validation to ensure frontend integration works
-- [ ] T055 [P] API documentation updates in backend/src/api/schemas/
-- [ ] T056 Add scheduled tasks for budget alerts in backend/src/core/scheduler.py
+- [x] T049 [P] Documentation updates in backend/docs/ and update quickstart.md
+- [x] T050 Code cleanup and refactoring across all modules
+- [x] T051 Performance optimization for OCR processing and AI interactions
+- [x] T052 [P] Additional unit tests (if needed) in backend/tests/unit/
+- [x] T053 Security hardening for financial data handling
+- [x] T054 Run quickstart.md validation to ensure frontend integration works
+- [x] T055 [P] API documentation updates in backend/src/api/schemas/
+- [x] T056 Add scheduled tasks for budget alerts in backend/src/core/scheduler.py
 
 ---
 
