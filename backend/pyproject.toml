@@ -21,6 +21,9 @@ dependencies = [
     "google-generativeai>=0.3.0",
     "python-multipart>=0.0.6",
     "pillow>=10.0.0"
+    ,"bcrypt>=4.0.1"
+    ,"PyJWT>=2.8.0"
+    ,"python-dotenv>=1.0.1"
 ]
 
 [project.optional-dependencies]
@@ -46,15 +49,8 @@ select = [
     "C",  # flake8-comprehensions
     "B",  # flake8-bugbear
 ]
-extend-ignore = [
-    "PLR",  # Design related pylint codes
-]
 extend-per-file-ignores = {}
 # Exclude a variety of commonly ignored directories.
-extend-ignore = [
-    "PLR",  # Design related pylint codes
-]
-line-length = 88
 indent-width = 4
 target-version = "py310"
 

@@ -39,14 +39,14 @@ description: "Task list for Financial Assistant with OCR and Expense Management"
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T004 Setup database schema and migrations framework using Supabase in backend/src/core/database.py
-- [ ] T005 [P] Implement authentication/authorization framework with JWT tokens in backend/src/core/security.py
-- [ ] T006 [P] Setup API routing and middleware structure in backend/src/api/main.py
-- [ ] T007 Create base User model that all stories depend on in backend/src/models/user.py
-- [ ] T008 Configure error handling and logging infrastructure in backend/src/core/config.py
-- [ ] T009 Setup environment configuration management in backend/src/core/config.py
-- [ ] T010 [P] Setup AI configuration framework for LangChain/LangGraph in backend/src/core/ai_config.py
-- [ ] T011 Create base API responses and DTOs in backend/src/api/schemas/
+- [x] T004 Setup database schema and migrations framework using Supabase in backend/src/core/database.py
+- [x] T005 [P] Implement authentication/authorization framework with JWT tokens in backend/src/core/security.py
+- [x] T006 [P] Setup API routing and middleware structure in backend/src/api/main.py
+- [x] T007 Create base User model that all stories depend on in backend/src/models/user.py
+- [x] T008 Configure error handling and logging infrastructure in backend/src/core/config.py
+- [x] T009 Setup environment configuration management in backend/src/core/config.py
+- [x] T010 [P] Setup AI configuration framework for LangChain/LangGraph in backend/src/core/ai_config.py
+- [x] T011 Create base API responses and DTOs in backend/src/api/schemas/
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -62,22 +62,22 @@ description: "Task list for Financial Assistant with OCR and Expense Management"
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T012 [P] [US1] Contract test for invoice processing endpoint in backend/tests/contract/test_invoice_api.py
-- [ ] T013 [P] [US1] Integration test for invoice OCR workflow in backend/tests/integration/test_invoice_processing.py
-- [ ] T014 [P] [US1] Unit test for OCR service in backend/tests/unit/test_ocr_service.py
+- [x] T012 [P] [US1] Contract test for invoice processing endpoint in backend/tests/contract/test_invoice_api.py
+- [x] T013 [P] [US1] Integration test for invoice OCR workflow in backend/tests/integration/test_invoice_processing.py
+- [x] T014 [P] [US1] Unit test for OCR service in backend/tests/unit/test_ocr_service.py
 
 ### Implementation for User Story 1
 
-- [ ] T015 [P] [US1] Create Invoice model in backend/src/models/invoice.py
-- [ ] T016 [P] [US1] Create Expense model in backend/src/models/expense.py
-- [ ] T017 [US1] Implement OCR service using gemini-2.5-flash in backend/src/services/ocr_service.py
-- [ ] T018 [US1] Implement Invoice service in backend/src/services/invoice_service.py
-- [ ] T019 [US1] Implement Invoice API endpoints in backend/src/api/v1/invoice_router.py
-- [ ] T020 [US1] Add AI interaction logging in backend/src/models/ai_interaction.py
-- [ ] T021 [US1] Add validation and error handling for invoice processing
-- [ ] T022 [US1] Add file upload handling for JPG, PNG, PDF formats in backend/src/utils/image_utils.py
-- [ ] T023 [US1] Add logging for invoice processing operations
-- [ ] T024 [US1] Create DTOs for invoice processing in backend/src/api/schemas/invoice.py
+- [x] T015 [P] [US1] Create Invoice model in backend/src/models/invoice.py
+- [x] T016 [P] [US1] Create Expense model in backend/src/models/expense.py
+- [x] T017 [US1] Implement OCR service using gemini-2.5-flash in backend/src/services/ocr_service.py
+- [x] T018 [US1] Implement Invoice service in backend/src/services/invoice_service.py
+- [x] T019 [US1] Implement Invoice API endpoints in backend/src/api/v1/invoice_router.py
+- [x] T020 [US1] Add AI interaction logging in backend/src/models/ai_interaction.py
+- [x] T021 [US1] Add validation and error handling for invoice processing
+- [x] T022 [US1] Add file upload handling for JPG, PNG, PDF formats in backend/src/utils/image_utils.py
+- [x] T023 [US1] Add logging for invoice processing operations
+- [x] T024 [US1] Create DTOs for invoice processing in backend/src/api/schemas/invoice.py
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently
 
@@ -91,21 +91,21 @@ description: "Task list for Financial Assistant with OCR and Expense Management"
 
 ### Tests for User Story 2 (REQUIRED) ⚠️
 
-- [ ] T025 [P] [US2] Contract test for expense categorization endpoint in backend/tests/contract/test_categorization_api.py
-- [ ] T026 [P] [US2] Integration test for expense categorization workflow in backend/tests/integration/test_expense_categorization.py
-- [ ] T027 [P] [US2] Unit test for categorization service in backend/tests/unit/test_categorization_service.py
+- [x] T025 [P] [US2] Contract test for expense categorization endpoint in backend/tests/contract/test_categorization_api.py
+- [x] T026 [P] [US2] Integration test for expense categorization workflow in backend/tests/integration/test_expense_categorization.py
+- [x] T027 [P] [US2] Unit test for categorization service in backend/tests/unit/test_categorization_service.py
 
 ### Implementation for User Story 2
 
-- [ ] T028 [P] [US2] Create Category model in backend/src/models/category.py
-- [ ] T029 [P] [US2] Create ExpenseCategorizationRule model in backend/src/models/expense_categorization_rule.py
-- [ ] T030 [US2] Implement Expense categorization service in backend/src/services/expense_categorization_service.py
-- [ ] T031 [US2] Implement AI agent service for expense categorization in backend/src/services/ai_agent_service.py
-- [ ] T032 [US2] Implement Category API endpoints in backend/src/api/v1/category_router.py
-- [ ] T033 [US2] Update Expense model with categorization fields and relationships
-- [ ] T034 [US2] Add validation and error handling for categorization
-- [ ] T035 [US2] Create DTOs for expense categorization in backend/src/api/schemas/category.py
-- [ ] T036 [US2] Integrate with User Story 1 components for processing extracted invoice data
+- [x] T028 [P] [US2] Create Category model in backend/src/models/category.py
+- [x] T029 [P] [US2] Create ExpenseCategorizationRule model in backend/src/models/expense_categorization_rule.py
+- [x] T030 [US2] Implement Expense categorization service in backend/src/services/expense_categorization_service.py
+- [x] T031 [US2] Implement AI agent service for expense categorization in backend/src/services/ai_agent_service.py
+- [x] T032 [US2] Implement Category API endpoints in backend/src/api/v1/category_router.py
+- [x] T033 [US2] Update Expense model with categorization fields and relationships
+- [x] T034 [US2] Add validation and error handling for categorization
+- [x] T035 [US2] Create DTOs for expense categorization in backend/src/api/schemas/category.py
+- [x] T036 [US2] Integrate with User Story 1 components for processing extracted invoice data
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently
 
