@@ -34,7 +34,12 @@ class Category(Base):
         cascade="all, delete-orphan",
     )
     categorization_feedbacks = relationship(
-        "CategorizationFeedback", back_populates="confirmed_category"
+        "CategorizationFeedback",
+        back_populates="confirmed_category",
+        foreign_keys="[CategorizationFeedback.confirmed_category_id]",
+    )
+    budgets = relationship(
+        "Budget", back_populates="category", cascade="all, delete-orphan"
     )
 
     def __repr__(self):

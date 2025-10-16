@@ -24,8 +24,13 @@ class CategorizationFeedback(Base):
     # Relationships
     user = relationship("User", back_populates="categorization_feedbacks")
     expense = relationship("Expense", back_populates="categorization_feedbacks")
+    suggested_category = relationship(
+        "Category", foreign_keys=[suggested_category_id], viewonly=True
+    )
     confirmed_category = relationship(
-        "Category", back_populates="categorization_feedbacks"
+        "Category",
+        back_populates="categorization_feedbacks",
+        foreign_keys=[confirmed_category_id],
     )
 
     def __repr__(self):

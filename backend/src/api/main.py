@@ -4,6 +4,9 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from src.core.config import Settings, configure_logging
+
+# Import all models to ensure SQLAlchemy relationships are initialized
+import src.models  # noqa: F401
 from src.api.v1.router import router as api_v1_router
 
 
@@ -44,6 +47,7 @@ async def http_exception_handler(_: Request, exc: HTTPException):
 async def validation_exception_handler(_: Request, exc: ValidationError):
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
+
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
@@ -51,6 +55,7 @@ def read_root():
 
 # Mount versioned API router (empty for now; endpoints will be added per stories)
 app.include_router(api_v1_router)
+
 
 @app.get("/health")
 def health_check():
