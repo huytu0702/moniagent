@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from src.core.database import Base
 
@@ -13,12 +14,12 @@ from src.core.database import Base
 class ExpenseCategory(Base):
     __tablename__ = "expense_categories"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
     name = Column(String, nullable=False)
     description = Column(String, nullable=True)
     icon = Column(String, nullable=True)  # Icon identifier for UI
     user_id = Column(
-        String, ForeignKey("users.id"), nullable=True
+        UUID(as_uuid=False), ForeignKey("users.id"), nullable=True
     )  # Null for system default categories
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -34,11 +35,11 @@ class ExpenseCategory(Base):
     def to_dict(self):
         """Convert the category to a dictionary representation"""
         return {
-            "id": self.id,
+            "id": str(self.id) if self.id else None,
             "name": self.name,
             "description": self.description,
             "icon": self.icon,
-            "user_id": self.user_id,
+            "user_id": str(self.user_id) if self.user_id else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

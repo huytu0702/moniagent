@@ -5,6 +5,7 @@ CategorizationFeedback model
 from datetime import datetime
 from uuid import uuid4
 from sqlalchemy import Column, String, DateTime, Float, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from src.core.database import Base
 
@@ -12,11 +13,15 @@ from src.core.database import Base
 class CategorizationFeedback(Base):
     __tablename__ = "categorization_feedback"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    user_id = Column(String, ForeignKey("users.id"), nullable=False)
-    expense_id = Column(String, ForeignKey("expenses.id"), nullable=False)
-    suggested_category_id = Column(String, ForeignKey("categories.id"), nullable=True)
-    confirmed_category_id = Column(String, ForeignKey("categories.id"), nullable=False)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
+    expense_id = Column(UUID(as_uuid=False), ForeignKey("expenses.id"), nullable=False)
+    suggested_category_id = Column(
+        UUID(as_uuid=False), ForeignKey("categories.id"), nullable=True
+    )
+    confirmed_category_id = Column(
+        UUID(as_uuid=False), ForeignKey("categories.id"), nullable=False
+    )
     confidence_score = Column(Float, nullable=True)  # Confidence of the suggestion
     feedback_type = Column(String, default="confirmation")  # confirmation, correction
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -39,11 +44,15 @@ class CategorizationFeedback(Base):
     def to_dict(self):
         """Convert the feedback to a dictionary representation"""
         return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "expense_id": self.expense_id,
-            "suggested_category_id": self.suggested_category_id,
-            "confirmed_category_id": self.confirmed_category_id,
+            "id": str(self.id) if self.id else None,
+            "user_id": str(self.user_id) if self.user_id else None,
+            "expense_id": str(self.expense_id) if self.expense_id else None,
+            "suggested_category_id": (
+                str(self.suggested_category_id) if self.suggested_category_id else None
+            ),
+            "confirmed_category_id": (
+                str(self.confirmed_category_id) if self.confirmed_category_id else None
+            ),
             "confidence_score": self.confidence_score,
             "feedback_type": self.feedback_type,
             "created_at": self.created_at.isoformat() if self.created_at else None,

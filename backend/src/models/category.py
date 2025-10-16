@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from src.core.database import Base
 
@@ -13,8 +14,8 @@ from src.core.database import Base
 class Category(Base):
     __tablename__ = "categories"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     icon = Column(String, nullable=True)  # Unicode icon or emoji
@@ -45,8 +46,8 @@ class Category(Base):
     def to_dict(self):
         """Convert the category to a dictionary representation"""
         return {
-            "id": self.id,
-            "user_id": self.user_id,
+            "id": str(self.id) if self.id else None,
+            "user_id": str(self.user_id) if self.user_id else None,
             "name": self.name,
             "description": self.description,
             "icon": self.icon,

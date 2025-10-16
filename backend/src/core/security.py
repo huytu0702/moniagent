@@ -66,7 +66,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     Dependency function that retrieves the current user from the access token.
     """
     from src.models.user import User
-
+    from src.core.database import get_db
+    
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -77,10 +78,16 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception
-        # Create a simple user object for the token holder
-        # In production, this would fetch from database
-        user = type('User', (), {'id': user_id})()
-        return user
+            
+        # Fetch the actual user from the database
+        db = next(get_db())
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user is None:
+                raise credentials_exception
+            return user
+        finally:
+            db.close()
     except jwt.PyJWTError:
         raise credentials_exception
 

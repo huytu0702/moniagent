@@ -7,6 +7,7 @@ from typing import Optional
 from uuid import uuid4
 from enum import Enum
 from sqlalchemy import Column, String, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from src.core.database import Base
 
@@ -22,8 +23,8 @@ class ChatSessionStatus(str, Enum):
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
     session_title = Column(String, nullable=True)
     status = Column(
         SQLEnum(ChatSessionStatus), default=ChatSessionStatus.ACTIVE, nullable=False
@@ -45,8 +46,8 @@ class ChatSession(Base):
     def to_dict(self):
         """Convert the chat session to a dictionary representation"""
         return {
-            "id": self.id,
-            "user_id": self.user_id,
+            "id": str(self.id) if self.id else None,
+            "user_id": str(self.user_id) if self.user_id else None,
             "session_title": self.session_title,
             "status": (
                 self.status.value
@@ -63,8 +64,10 @@ class ChatMessage(Base):
 
     __tablename__ = "chat_messages"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    session_id = Column(String, ForeignKey("chat_sessions.id"), nullable=False)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    session_id = Column(
+        UUID(as_uuid=False), ForeignKey("chat_sessions.id"), nullable=False
+    )
     role = Column(String, nullable=False)  # "user" or "assistant"
     content = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -78,8 +81,8 @@ class ChatMessage(Base):
     def to_dict(self):
         """Convert the message to a dictionary representation"""
         return {
-            "id": self.id,
-            "session_id": self.session_id,
+            "id": str(self.id) if self.id else None,
+            "session_id": str(self.session_id) if self.session_id else None,
             "role": self.role,
             "content": self.content,
             "created_at": self.created_at.isoformat() if self.created_at else None,

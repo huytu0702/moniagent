@@ -13,8 +13,38 @@ from contextlib import contextmanager, asynccontextmanager
 Base = declarative_base()
 
 # Initialize database engine and session (for standard database models, separate from Supabase)
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")  # Using SQLite for local testing
-engine = create_engine(DATABASE_URL)
+# Option 1: Use DATABASE_URL if provided directly
+# Option 2: Build from Supabase credentials
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+if not DATABASE_URL:
+    # Build PostgreSQL connection string from Supabase credentials
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_DB_PASSWORD = os.getenv("SUPABASE_DB_PASSWORD", "")
+
+    if SUPABASE_URL and SUPABASE_DB_PASSWORD:
+        import re
+
+        match = re.search(r'https://([^.]+)\.supabase\.co', SUPABASE_URL)
+        if match:
+            project_ref = match.group(1)
+            # Supabase PostgreSQL connection string format (Pooler mode for better performance)
+            DATABASE_URL = f"postgresql://postgres.{project_ref}:{SUPABASE_DB_PASSWORD}@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres"
+        else:
+            DATABASE_URL = "sqlite:///./test.db"
+    else:
+        DATABASE_URL = "sqlite:///./test.db"  # Fallback to SQLite
+
+# Add connection args for PostgreSQL
+if DATABASE_URL.startswith("postgresql"):
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,  # Verify connections before using them
+        echo=True,  # Log SQL queries for debugging
+    )
+else:
+    engine = create_engine(DATABASE_URL)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -38,9 +68,8 @@ class DatabaseConfig:
     def __init__(self) -> None:
         self.url: str = os.getenv("SUPABASE_URL", "")
         # Prefer service role key for backend operations; fallback to anon for read-only scenarios
-        self.key: str = (
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            or os.getenv("SUPABASE_ANON_KEY", "")
+        self.key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv(
+            "SUPABASE_ANON_KEY", ""
         )
 
         if not self.url or not self.key:
@@ -62,5 +91,3 @@ def users_table() -> Client.table:
 
 
 __all__ = ["get_supabase_client", "users_table", "DatabaseConfig"]
-
-

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 from sqlalchemy import Column, String, DateTime, Float, Text, ForeignKey, Boolean
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from src.core.database import Base
 
@@ -13,12 +14,14 @@ from src.core.database import Base
 class Expense(Base):
     __tablename__ = "expenses"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
     invoice_id = Column(
-        String, ForeignKey("invoices.id"), nullable=True
+        UUID(as_uuid=False), ForeignKey("invoices.id"), nullable=True
     )  # Can be null if not from invoice
-    category_id = Column(String, ForeignKey("expense_categories.id"), nullable=True)
+    category_id = Column(
+        UUID(as_uuid=False), ForeignKey("expense_categories.id"), nullable=True
+    )
     description = Column(Text, nullable=True)
     merchant_name = Column(String, nullable=True)  # Name of location/restaurant
     amount = Column(Float, nullable=False)
@@ -45,10 +48,10 @@ class Expense(Base):
     def to_dict(self):
         """Convert the expense to a dictionary representation"""
         return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "invoice_id": self.invoice_id,
-            "category_id": self.category_id,
+            "id": str(self.id) if self.id else None,
+            "user_id": str(self.user_id) if self.user_id else None,
+            "invoice_id": str(self.invoice_id) if self.invoice_id else None,
+            "category_id": str(self.category_id) if self.category_id else None,
             "description": self.description,
             "merchant_name": self.merchant_name,
             "amount": self.amount,

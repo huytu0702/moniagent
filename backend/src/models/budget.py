@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 from sqlalchemy import Column, String, DateTime, Float, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from src.core.database import Base
 
@@ -15,9 +16,11 @@ from src.core.database import Base
 class Budget(Base):
     __tablename__ = "budgets"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    user_id = Column(String, ForeignKey("users.id"), nullable=False)
-    category_id = Column(String, ForeignKey("expense_categories.id"), nullable=False)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
+    category_id = Column(
+        UUID(as_uuid=False), ForeignKey("expense_categories.id"), nullable=False
+    )
     limit_amount = Column(Float, nullable=False)  # Monthly/weekly limit
     period = Column(String, default="monthly")  # 'monthly', 'weekly', 'yearly'
     alert_threshold = Column(
@@ -36,9 +39,9 @@ class Budget(Base):
     def to_dict(self):
         """Convert the budget to a dictionary representation"""
         return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "category_id": self.category_id,
+            "id": str(self.id) if self.id else None,
+            "user_id": str(self.user_id) if self.user_id else None,
+            "category_id": str(self.category_id) if self.category_id else None,
             "limit_amount": self.limit_amount,
             "period": self.period,
             "alert_threshold": self.alert_threshold,

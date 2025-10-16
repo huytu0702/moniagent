@@ -8,9 +8,13 @@ from .budget_router import router as budget_router, spending_router
 from .ai_agent_router import router as ai_agent_router
 from .chat_router import router as chat_router
 from .expense_router import router as expense_router
+from .auth_router import router as auth_router
 
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/v1")
+
+# Include auth endpoints
+router.include_router(auth_router, prefix="", tags=["auth"])
 
 # Include invoice endpoints
 router.include_router(invoice_router, prefix="", tags=["invoices"])
