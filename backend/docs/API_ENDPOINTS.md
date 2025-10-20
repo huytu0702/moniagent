@@ -47,20 +47,16 @@ Content-Type: application/json
 ### Login
 ```http
 POST /auth/login
-Content-Type: application/json
+Content-Type: application/x-www-form-urlencoded
 
-{
-  "email": "user@example.com",
-  "password": "securePassword123"
-}
+username=user@example.com&password=securePassword123
 ```
 
 **Response** (200 OK):
 ```json
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-  "token_type": "bearer",
-  "expires_in": 3600
+  "token_type": "bearer"
 }
 ```
 
@@ -74,27 +70,24 @@ Content-Type: application/json
 
 ### Upload & Process Invoice
 ```http
-POST /invoices
+POST /invoices/process
 Authorization: Bearer <token>
 Content-Type: multipart/form-data
 
 file: <image-file>
 ```
 
-**Supported Formats**: JPG, PNG, PDF
-**Max Size**: 25MB
+**Supported Formats**: JPG, PNG
+**Max Size**: Not specified
 
-**Response** (201 Created):
+**Response** (200 OK):
 ```json
 {
-  "id": "invoice-uuid",
-  "user_id": "user-uuid",
+  "invoice_id": "invoice-uuid",
   "store_name": "Whole Foods Market",
-  "invoice_date": "2025-01-15",
+  "date": "2025-01-15",
   "total_amount": 45.99,
-  "status": "pending_review",
-  "image_url": "https://...",
-  "created_at": "2025-01-15T10:30:00Z"
+  "status": "processed"
 }
 ```
 
@@ -113,63 +106,32 @@ Authorization: Bearer <token>
 **Response** (200 OK):
 ```json
 {
-  "id": "invoice-uuid",
-  "user_id": "user-uuid",
+  "invoice_id": "invoice-uuid",
   "store_name": "Whole Foods Market",
-  "invoice_date": "2025-01-15",
+  "date": "2025-01-15",
   "total_amount": 45.99,
-  "status": "confirmed",
-  "items": [
-    {
-      "description": "Organic Bananas",
-      "quantity": 2,
-      "price": 5.99
-    }
-  ],
-  "created_at": "2025-01-15T10:30:00Z",
-  "updated_at": "2025-01-15T11:00:00Z"
-}
-```
-
-### Update Invoice
-```http
-PUT /invoices/{invoice_id}
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "store_name": "Whole Foods Market (Edited)",
-  "total_amount": 46.99,
   "status": "confirmed"
 }
 ```
-
-**Response** (200 OK): Updated invoice object
-
-**Errors**:
-- `404 Not Found`: Invoice not found
-- `403 Forbidden`: User doesn't own this invoice
 
 ### List User Invoices
 ```http
 GET /invoices
 Authorization: Bearer <token>
-
-Query Parameters:
-  ?status=pending_review,confirmed
-  ?skip=0&limit=20
-  ?start_date=2025-01-01&end_date=2025-01-31
 ```
 
 **Response** (200 OK):
 ```json
 {
-  "items": [
-    { "id": "...", "store_name": "...", "..." }
-  ],
-  "total": 42,
-  "skip": 0,
-  "limit": 20
+  "invoices": [
+    {
+      "invoice_id": "invoice-uuid",
+      "store_name": "Whole Foods Market",
+      "date": "2025-01-15",
+      "total_amount": 45.99,
+      "status": "confirmed"
+    }
+  ]
 }
 ```
 
