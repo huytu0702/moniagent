@@ -20,7 +20,7 @@ class Expense(Base):
         UUID(as_uuid=False), ForeignKey("invoices.id"), nullable=True
     )  # Can be null if not from invoice
     category_id = Column(
-        UUID(as_uuid=False), ForeignKey("expense_categories.id"), nullable=True
+        UUID(as_uuid=False), ForeignKey("categories.id"), nullable=True
     )
     description = Column(Text, nullable=True)
     merchant_name = Column(String, nullable=True)  # Name of location/restaurant
@@ -37,7 +37,7 @@ class Expense(Base):
     # Relationships
     user = relationship("User", back_populates="expenses")
     invoice = relationship("Invoice", back_populates="expenses")
-    category = relationship("ExpenseCategory", back_populates="expenses")
+    category = relationship("Category", back_populates="expenses")
     categorization_feedbacks = relationship(
         "CategorizationFeedback", back_populates="expense", cascade="all, delete-orphan"
     )

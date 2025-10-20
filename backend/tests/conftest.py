@@ -311,10 +311,11 @@ def test_user(test_db_session):
 @pytest.fixture
 def test_category(test_db_session):
     """Create a test expense category"""
-    from src.models.expense_category import ExpenseCategory
+    from src.models.category import Category
 
-    category = ExpenseCategory(
+    category = Category(
         id="test-category-id",
+        user_id="test-user-id",
         name="Food & Dining",
         description="Food and dining expenses",
     )

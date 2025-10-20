@@ -161,6 +161,50 @@ class CategorizationService:
 
         return 0.0
 
+    def _match_rule_for_text(self, text: str, rule: ExpenseCategorizationRule) -> float:
+        """
+        Match text against a rule and return confidence score
+        Used for pre-categorization before expense is saved
+
+        Args:
+            text: Text to match (usually merchant name)
+            rule: ExpenseCategorizationRule to match against
+
+        Returns:
+            Confidence score between 0 and 1
+        """
+        if not text:
+            return 0.0
+
+        expense_text = text.lower()
+        pattern = rule.store_name_pattern.lower()
+
+        if rule.rule_type == "exact_match":
+            if expense_text == pattern:
+                return 1.0
+            return 0.0
+
+        elif rule.rule_type == "keyword":
+            # Simple keyword matching
+            if pattern in expense_text:
+                return 0.9
+            # Partial match
+            words = pattern.split()
+            matching_words = sum(1 for word in words if word in expense_text)
+            if matching_words > 0:
+                return min(0.8, matching_words / len(words))
+            return 0.0
+
+        elif rule.rule_type == "regex":
+            try:
+                if re.search(pattern, expense_text):
+                    return 0.95
+            except re.error:
+                logger.warning(f"Invalid regex pattern: {pattern}")
+            return 0.0
+
+        return 0.0
+
     def _get_default_suggestion(
         self, user_id: str, expense: Expense, db_session: Session
     ) -> Dict[str, Any]:

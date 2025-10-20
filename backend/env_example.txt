@@ -1,0 +1,22 @@
+# Supabase Configuration
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_DB_PASSWORD=
+DATABASE_URL=
+# JWT Security
+JWT_SECRET=
+
+# Google AI
+GOOGLE_API_KEY=
+
+# App Configuration
+APP_NAME=MoniAgent API
+ENVIRONMENT=development
+LOG_LEVEL=INFO
+
+# File Uploads
+UPLOAD_DIR=uploads
+
+# Access Token
+ACCESS_TOKEN_EXPIRE_MINUTES=60

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 from sqlalchemy.orm import Session
 from src.models.budget import Budget
-from src.models.expense_category import ExpenseCategory
+from src.models.category import Category
 from src.models.expense import Expense
 
 
@@ -315,12 +315,12 @@ class BudgetManagementService:
             warning = percentage_used >= budget.alert_threshold
 
             # Get category name
-            expense_category = (
-                session_to_use.query(ExpenseCategory)
-                .filter(ExpenseCategory.id == category_id)
+            category = (
+                session_to_use.query(Category)
+                .filter(Category.id == category_id)
                 .first()
             )
-            category_name = expense_category.name if expense_category else "Unknown"
+            category_name = category.name if category else "Unknown"
 
             return {
                 "category_id": category_id,

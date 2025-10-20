@@ -17,7 +17,7 @@ from src.services.expense_processing_service import ExpenseProcessingService
 from src.services.financial_advice_service import FinancialAdviceService
 from src.models.budget import Budget
 from src.models.expense import Expense
-from src.models.expense_category import ExpenseCategory
+from src.models.category import Category
 from src.models.user import User
 
 
@@ -43,7 +43,7 @@ def test_user():
     user = User(
         id="test-user-123",
         email="test@example.com",
-        hashed_password="hashed",
+        password_hash="hashed",
     )
     return user
 
@@ -51,8 +51,9 @@ def test_user():
 @pytest.fixture
 def test_category():
     """Create a test expense category"""
-    category = ExpenseCategory(
+    category = Category(
         id="cat-eating-out",
+        user_id="test-user-123",
         name="Eating Out",
         description="Restaurant and dining expenses",
     )
@@ -116,10 +117,9 @@ def test_budget_warning_when_approaching_limit(
             # For Budget query
             if hasattr(model, '__tablename__') and model.__tablename__ == 'budgets':
                 mock_result.first.return_value = test_budget
-            # For ExpenseCategory query
+            # For Category query
             elif (
-                hasattr(model, '__tablename__')
-                and model.__tablename__ == 'expense_categories'
+                hasattr(model, '__tablename__') and model.__tablename__ == 'categories'
             ):
                 mock_result.first.return_value = test_category
             # For Expense query

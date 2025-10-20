@@ -108,6 +108,12 @@ class ExtractedExpenseInfo(BaseModel):
     date: Optional[str] = Field(None, description="Date of expense (YYYY-MM-DD)")
     confidence: float = Field(..., description="Confidence level of extraction (0-1)")
     description: Optional[str] = Field(None, description="Additional description")
+    suggested_category_id: Optional[str] = Field(
+        None, description="Auto-suggested category ID based on merchant and rules"
+    )
+    categorization_confidence: Optional[float] = Field(
+        None, description="Confidence level of categorization suggestion (0-1)"
+    )
 
 
 class ChatMessageResponse(BaseModel):
@@ -132,6 +138,8 @@ class ChatMessageResponse(BaseModel):
                     "amount": 25.00,
                     "date": "2025-10-16",
                     "confidence": 0.95,
+                    "suggested_category_id": "cat-food-dining",
+                    "categorization_confidence": 0.9,
                 },
                 "requires_confirmation": True,
                 "budget_warning": None,

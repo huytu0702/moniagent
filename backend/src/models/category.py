@@ -39,6 +39,8 @@ class Category(Base):
         back_populates="confirmed_category",
         foreign_keys="[CategorizationFeedback.confirmed_category_id]",
     )
+    expenses = relationship("Expense", back_populates="category")
+    budgets = relationship("Budget", back_populates="category")
 
     def __repr__(self):
         return f"<Category(id={self.id}, name={self.name}, user_id={self.user_id})>"

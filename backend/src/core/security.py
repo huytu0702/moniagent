@@ -9,6 +9,8 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
+from src.core.config import Settings
+
 
 # OAuth2 scheme for token authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -67,12 +69,26 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     """
     from src.models.user import User
     from src.core.database import get_db
+    from src.core.config import Settings
     
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    # For development, allow a mock token to simulate a user
+    if Settings.environment == "development" and token == "mock-token-for-development":
+        # Create a mock user for development purposes
+        class MockUser:
+            def __init__(self):
+                self.id = "dev-user-123"
+                self.email = "dev@example.com"
+                self.first_name = "Development"
+                self.last_name = "User"
+        
+        return MockUser()
+    
     try:
         payload = decode_access_token(token)
         user_id: str = payload.get("sub")

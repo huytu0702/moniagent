@@ -8,11 +8,12 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 from src.models.expense import Expense
-from src.models.expense_category import ExpenseCategory
+from src.models.category import Category
 from src.models.budget import Budget
 from src.services.ocr_service import OCRService
 from src.services.budget_management_service import BudgetManagementService
 from src.services.financial_advice_service import FinancialAdviceService
+from src.services.categorization_service import CategorizationService
 from src.utils.validators import validate_amount, validate_date_string
 from src.utils.exceptions import ValidationError
 
@@ -31,15 +32,18 @@ class ExpenseProcessingService:
         self.budget_service = BudgetManagementService(db_session)
         self.advice_service = FinancialAdviceService()
 
-    def extract_expense_from_text(self, text: str) -> Dict[str, Any]:
+    def extract_expense_from_text(
+        self, text: str, user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Extract expense information from text input
+        Extract expense information from text input and auto-suggest category if user_id provided
 
         Args:
             text: Text containing expense information
+            user_id: Optional user ID to enable auto-categorization
 
         Returns:
-            Dictionary with extracted expense data
+            Dictionary with extracted expense data including optional category_id and confidence_score
         """
         try:
             logger.info("Extracting expense from text")
@@ -57,10 +61,13 @@ class ExpenseProcessingService:
             }
 
             import re
+
             for line in lines:
                 lline = line.lower()
                 # Look for amounts when context suggests a purchase
-                if any(t in lline for t in ["$", "cost", "price", "paid", "spent", "total"]):
+                if any(
+                    t in lline for t in ["$", "cost", "price", "paid", "spent", "total"]
+                ):
                     amounts = re.findall(r"\$?[\d,]+\.?\d*", line)
                     if amounts:
                         try:
@@ -80,11 +87,76 @@ class ExpenseProcessingService:
                 if m and not expense_data.get("merchant_name"):
                     merchant_guess = m.group(1).strip()
                     # Trim trailing generic words
-                    merchant_guess = re.sub(r"\s+(yesterday|today|tonight)$", "", merchant_guess, flags=re.I)
+                    merchant_guess = re.sub(
+                        r"\s+(yesterday|today|tonight)$", "", merchant_guess, flags=re.I
+                    )
                     expense_data["merchant_name"] = merchant_guess
 
             if expense_data["amount"]:
                 expense_data["confidence"] = 0.7
+
+            # Auto-suggest category if user_id provided
+            if user_id and expense_data.get("merchant_name"):
+                try:
+                    logger.info(
+                        f"Attempting to auto-categorize expense from '{expense_data.get('merchant_name')}' for user {user_id}"
+                    )
+                    # Create temporary expense to get suggestion
+                    # Note: This is used only for categorization suggestion before saving
+                    categorization_service = CategorizationService()
+
+                    # Get user's categorization rules
+                    from src.models.expense_categorization_rule import (
+                        ExpenseCategorizationRule,
+                    )
+
+                    rules = []
+                    if self.db_session:
+                        rules = (
+                            self.db_session.query(ExpenseCategorizationRule)
+                            .filter(
+                                ExpenseCategorizationRule.user_id == user_id,
+                                ExpenseCategorizationRule.is_active == True,
+                            )
+                            .all()
+                        )
+
+                    if rules:
+                        # Try to match rules against merchant name
+                        best_match = None
+                        best_confidence = 0.0
+
+                        for rule in rules:
+                            confidence = categorization_service._match_rule_for_text(
+                                expense_data.get("merchant_name"), rule
+                            )
+                            if confidence > best_confidence:
+                                best_confidence = confidence
+                                best_match = rule
+
+                        # If we found a good match, add category suggestion
+                        if (
+                            best_match
+                            and best_confidence >= best_match.confidence_threshold
+                        ):
+                            expense_data["category_id"] = best_match.category_id
+                            expense_data["suggested_category_id"] = (
+                                best_match.category_id
+                            )
+                            expense_data["categorization_confidence"] = best_confidence
+                            logger.info(
+                                f"Auto-suggested category {best_match.category_id} with confidence {best_confidence}"
+                            )
+                    else:
+                        logger.debug(
+                            f"No categorization rules found for user {user_id}"
+                        )
+
+                except Exception as e:
+                    # Don't fail extraction if categorization fails
+                    logger.warning(
+                        f"Auto-categorization failed (non-blocking): {str(e)}"
+                    )
 
             return expense_data
 
@@ -142,6 +214,7 @@ class ExpenseProcessingService:
                 # Phase 6: reject future dates
                 try:
                     from datetime import datetime as _dt
+
                     dt = _dt.fromisoformat(expense_data["date"]).date()
                     if dt > _dt.utcnow().date():
                         return False
@@ -518,23 +591,24 @@ class ExpenseProcessingService:
         try:
             if not self.db_session:
                 raise ValueError("Database session not available")
-            
+
             # Validate amount
             if amount <= 0:
                 raise ValidationError("Amount must be greater than 0")
-            
+
             # Validate date if provided
             if date:
                 validate_date_string(date)
                 # Phase 6: reject future dates
                 try:
                     from datetime import datetime as _dt
+
                     dt = _dt.fromisoformat(date).date()
                     if dt > _dt.utcnow().date():
                         raise ValidationError("Date cannot be in the future")
                 except Exception:
                     raise ValidationError("Invalid date format")
-            
+
             # Create expense record
             expense = Expense(
                 user_id=user_id,
@@ -553,7 +627,7 @@ class ExpenseProcessingService:
                             "amount": amount,
                             "date": date,
                             "category_id": category_id,
-                            "description": description
+                            "description": description,
                         },
                     }
                 ),
@@ -576,7 +650,6 @@ class ExpenseProcessingService:
             if self.db_session:
                 self.db_session.rollback()
             raise ValidationError(f"Failed to create expense: {str(e)}")
-
 
     def _store_correction_learning(
         self,
