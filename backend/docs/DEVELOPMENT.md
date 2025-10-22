@@ -67,9 +67,11 @@ backend/
 - Models live under `src/models/` and use SQLAlchemy declarative base; remember to run migrations/DDL externally.
 - **Vietnamese Categories**: When a new user registers, 10 Vietnamese system categories and 60-122 keyword-based rules are automatically initialized via `CategoryService.initialize_user_categories()` and `CategorizationService.initialize_vietnamese_categorization_rules()`.
 - **LLM Categorization**: Expenses are auto-categorized using Gemini 2.5 Flash with a prompt listing all user's Vietnamese categories. Falls back to keyword-based matching if LLM fails.
+- **Confirmation Flow** (NEW): After saving an expense, the agent asks for confirmation before returning to the user. Users can approve or provide corrections (merchant name, amount, date), which are detected using `gemini-2.5-flash-lite` model.
 
 ## Auth & Environment
-- JWT secret is required (`
+- JWT secret is required (`JWT_SECRET` env var)
+- Mock token for development: `mock-token-for-development` resolves to a synthetic user in development mode
 
 ## Testing
 - Unit tests focus on service logic with mocks (see `tests/unit/`).  
@@ -80,10 +82,31 @@ backend/
   - User categories auto-population on registration
   - Categorization rules creation
   - LLM-based categorization flows
+- **Confirmation Flow Testing** (NEW): See `tests/unit/test_confirmation_flow.py` for comprehensive tests covering:
+  - LangGraph confirmation nodes (`ask_confirmation`, `detect_update_intent`, `process_update`)
+  - Intent detection with keyword fallback
+  - Multi-turn conversation with corrections
+  - Budget warnings and financial advice during confirmation
+  - Tests include:
+    ```bash
+    pytest tests/unit/test_confirmation_flow.py -v
+    pytest tests/unit/test_confirmation_flow.py::TestConfirmationFlow::test_handle_update_confirmation_with_update -v
+    pytest tests/unit/test_confirmation_flow.py::TestLangGraphConfirmationNodes -v
+    ```
 - Tips:
   ```bash
   pytest -k ocr_service -vv        # Filter by keyword
   pytest tests/integration/test_vietnamese_categories.py -v  # Vietnamese categories
+  pytest tests/unit/test_confirmation_flow.py -v  # Confirmation flow
   pytest --maxfail=1 --disable-warnings
   pytest --cov=src --cov-report=term-missing
   ```
+
+## Manual Testing Confirmation Flow (Local)
+1. Start API: `uvicorn src.api.main:app --reload`
+2. Register user: `POST /v1/auth/register` with email/password
+3. Start chat: `POST /v1/chat/start`
+4. Send expense message: `POST /v1/chat/{session_id}/message` with text like "Tôi mua cà phê 25000đ tại Starbucks"
+5. Agent returns with `asking_confirmation=true` and saved_expense details
+6. Send confirmation: `POST /v1/chat/{session_id}/message` with "Không" (no changes) or "Thay đổi số tiền thành 50000" (corrections)
+7. Agent processes intent detection and returns final confirmation message

@@ -32,8 +32,22 @@
 
 ## External Integrations
 - **Google Gemini**: API key retrieved from `GOOGLE_API_KEY`. Calls are wrapped with error handling; malformed replies trigger `ValueError` and return 400/500 to the client. Consider adding request quotas and fallbacks when rate-limited.
+- **Gemini 2.5 Flash Lite** (NEW): Used for intent detection in multi-turn confirmation flows. Lightweight model reduces latency but should still be wrapped with error handling and rate limits.
 - **LangGraph / LangChain**: Tool bindings call deterministic services only; avoid exposing raw user input to the LLM without sanitisation. Add content filtering if dealing with PII or financial account numbers.
 - **Supabase**: Database interactions rely on SQLAlchemy ORM queries. Enable Row Level Security (RLS) policies in Supabase for an extra protection layer.
+
+## Multi-Turn Conversation Security (NEW)
+- **Session Validation**: Every message in a chat session is tied to a `ChatSession` with user ownership enforced through `AIAgentService`.
+- **Intent Detection Injection**: The confirmation flow sends user messages to `gemini-2.5-flash-lite` for intent detection. While the model only receives structured prompts asking for JSON output, consider:
+  - Sanitize user message input before sending to LLM
+  - Validate JSON response structure before processing corrections
+  - Log all intent detection requests with user_id and session_id for audit
+- **Correction Validation**: All corrections to expenses are validated:
+  - `merchant_name`: string validation, max length
+  - `amount`: positive numeric value validation
+  - `date`: date format and future date rejection
+  - These are re-applied through the same validation pipeline as manual expense updates
+- **Expense Update Logging**: Each correction triggers `CategorizationFeedback` record and learning logs for future audit trails.
 
 ## Logging & Monitoring
 - `configure_logging` sets global logging according to `LOG_LEVEL`. Sensitive data (passwords, tokens, invoice contents) must never be logged; current code only logs identifiers and status messages.
@@ -53,16 +67,20 @@
 - [ ] Enforce HTTPS and verify HSTS headers in production.  
 - [ ] Rotate `JWT_SECRET`, Supabase keys, and `GOOGLE_API_KEY` regularly.  
 - [ ] Implement refresh tokens or short-lived access tokens plus reauth if session duration requirements extend beyond 60 minutes.  
-- [ ] Add rate limiting (login, invoice upload, chat) via API gateway or custom middleware.  
+- [ ] Add rate limiting (login, invoice upload, chat) via API gateway or custom middleware.
+- [ ] **NEW**: Add rate limiting on chat message endpoint to prevent abuse of confirmation flow and LLM calls.
 - [ ] Enable alerting on authentication failures, unusual spend extraction, and OCR errors.  
 - [ ] Back up the production database and perform periodic restore drills.  
 - [ ] Run dependency vulnerability scans (`pip-audit`, GitHub dependabot) monthly.  
-- [ ] Conduct penetration testing focusing on file uploads, chat prompt injection, and JWT tampering.  
+- [ ] Conduct penetration testing focusing on file uploads, chat prompt injection, and JWT tampering.
+- [ ] **NEW**: Test prompt injection attacks on confirmation intent detection and correction extraction.
 - [ ] Ensure Supabase RLS rules match API ownership checks (defence in depth).
 
 ## Future Improvements
 - Introduce CSRF protection if session cookies are used.  
 - Add account locking or exponential backoff on repeated authentication failures.  
 - Persist full audit trails for expense corrections and AI-suggested actions.  
-- Extend chat safety with prompt shields or moderation endpoints before forwarding to Gemini.  
+- Extend chat safety with prompt shields or moderation endpoints before forwarding to Gemini.
+- **NEW**: Implement session timeout for confirmation flows (e.g., expire `asking_confirmation` state after 5 minutes of inactivity).
 - Capture structured metrics (latency, OCR success rate, LLM token usage) for proactive monitoring.
+- Add content filtering for user messages before sending to LLM (both full Gemini and lite model).

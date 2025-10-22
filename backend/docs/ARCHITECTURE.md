@@ -2,7 +2,8 @@
 
 ## System Overview
 - FastAPI service that ingests invoices, normalises expenses, manages user budgets, and exposes an AI assistant for conversational expense tracking.
-- Google Gemini (via LangChain/LangGraph) powers OCR and LLM interactions; Supabase/PostgreSQL stores primary data with an on-disk SQLite fallback for local development.
+- Google Gemini (via LangChain/LangGraph) powers OCR and LLM interactions; `gemini-2.5-flash-lite` handles intent detection for multi-turn confirmation flows.
+- Supabase/PostgreSQL stores primary data with an on-disk SQLite fallback for local development.
 - JWT-based auth wraps all v1 endpoints except `/auth/*`; custom exceptions and structured logging keep error handling consistent.
 
 ## Technology Stack
@@ -98,32 +99,29 @@ backend/
 ### Conversational Expense Tracking
 1. `POST /v1/chat/start` creates a `ChatSession` and returns an onboarding prompt from `AIAgentService.get_initial_message`.
 2. `POST /v1/chat/{session_id}/message` stores the user message, forwards it to `LangGraphAIAgent.run`, and appends the assistant reply plus any extracted expense, budget warning, or generated advice.
-3. LangGraph nodes call into `ExpenseProcessingService` for extraction and persistence, `BudgetManagementService` for alert checks, and `FinancialAdviceService` for context-aware recommendations.
-4. Corrections are parsed in `AIAgentService.handle_correction_request` using a targeted Gemini prompt; confirmed corrections feed back into `ExpenseProcessingService.update_expense`, which records `CategorizationFeedback` when learning is enabled.
+3. **NEW - Confirmation Flow**:
+   - After expense is saved, agent returns response with `asking_confirmation=true` and `saved_expense` details
+   - User receives message asking if they want to change the information
+   - Frontend displays saved expense details and waits for user confirmation
+   - User can respond with "No changes" or corrections like "Thay đổi số tiền thành 50000"
+4. **NEW - Correction Processing**:
+   - `AIAgentService.detect_update_intent` uses `gemini-2.5-flash-lite` to analyze if user wants updates
+   - If user wants corrections, `detect_update_intent` extracts merchant_name, amount, date from message
+   - `AIAgentService.handle_update_confirmation` applies corrections via `ExpenseProcessingService.update_expense`
+   - Updated expense with confirmation message is returned to user
+5. LangGraph nodes call into `ExpenseProcessingService` for extraction and persistence, `BudgetManagementService` for alert checks, and `FinancialAdviceService` for context-aware recommendations.
+6. Corrections are parsed in `AIAgentService.handle_correction_request` using a targeted Gemini prompt; confirmed corrections feed back into `ExpenseProcessingService.update_expense`, which records `CategorizationFeedback` when learning is enabled.
+
+## API Layer Updates (`src/api`)
+
+**NEW Response Fields in `/v1/chat/{session_id}/message`**:
+- `asking_confirmation` (bool): Indicates agent is asking for confirmation of saved expense
+- `saved_expense` (dict): Contains id, merchant_name, amount, date, category_id of the saved expense
+
+The response lifecycle now supports multi-turn confirmation:
+1. First response: `asking_confirmation=true`, `saved_expense` populated, `extracted_expense` null
+2. User sends correction/confirmation message
+3. Second response: `asking_confirmation=false`, confirmation message with updated values
 
 ### Budget Monitoring and Reporting
-1. Users manage budgets through `POST /v1/budgets`, `PUT /v1/budgets/{id}`, and `DELETE /v1/budgets/{id}`.
-2. `BudgetManagementService.check_budget_status` powers `GET /v1/budgets/check/{category_id}`, projecting remaining spend and flagging thresholds.
-3. `ExpenseAggregationService.get_spending_summary` backs `GET /v1/spending/summary`, aggregating real data when a DB session is supplied and falling back to deterministic fixtures during local testing.
-4. `scheduler.py` describes reusable tasks (`BudgetAlertTask`, `ExpenseAggregationTask`) that can run in the background once wired to an event loop or worker.
-
-### Categorisation & Feedback Loop
-1. Expense suggestions (`POST /v1/categories/suggest`) use `CategorizationService.suggest_category` to match user-defined rules and heuristics.
-2. Confirmations or corrections (`POST /v1/categories/confirm` and expense updates) persist `CategorizationFeedback`, closing the feedback loop for future recommendations.
-3. Rule CRUD endpoints expose fine-grained control over keyword/regex/exact match strategies per user.
-
-## External Integrations
-- **Supabase/PostgreSQL**: primary persistence via SQLAlchemy; environment variables (`SUPABASE_URL`, `SUPABASE_DB_PASSWORD`) produce a connection string with connection pooling and SQL echo for debug mode.
-- **Google Generative AI (Gemini)**: OCR and LLM tasks run through `google-generativeai` clients; API keys are loaded lazily to keep startup flexible.
-- **LangChain / LangGraph**: The agent graph composes deterministic tools with generative outputs, modelling expense extraction and advice as state transitions rather than ad-hoc prompt chains.
-
-## Error Handling & Resilience
-- `ApplicationError` hierarchy maps domain failures to typed HTTP responses; FastAPI exception handlers return canonical `{detail, error_code}` payloads.
-- OCR and AI interactions sanitise markdown-wrapped JSON before parsing, reducing malformatted response risk.
-- Budget, aggregation, and advice services provide deterministic fallbacks when external services or DB sessions are unavailable, keeping API responses predictable during local development.
-
-## Known Gaps & Next Steps
-- Several endpoints (`GET /v1/budgets/{id}`, chat correction flows) still return placeholder data until the persistence layer is finalised.
-- Scheduler tasks are defined but not yet hooked to a long-running worker or FastAPI lifespan event.
-- Rate limiting, notification delivery, and webhook callbacks are not implemented; the architecture leaves space to add them behind `core` utilities.
-- Additional observability (structured logs to a sink, tracing) and more comprehensive automated tests are recommended as the service matures.
+1. Users manage budgets through `

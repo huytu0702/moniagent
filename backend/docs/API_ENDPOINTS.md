@@ -444,29 +444,77 @@ Content-Type: application/json
   "message_type": "text"
 }
 ```
-**Response 200**
+**Response 200 (First Turn - Asking for Confirmation)**
 ```json
 {
   "message_id": "msg-789",
-  "response": "I found an expense for $45.00 at Trader Joe's on 2025-10-15. Does that look right?",
-  "extracted_expense": {
+  "response": "Tôi đã lưu các thông tin chi tiêu sau vào hệ thống:\n📌 **Thông tin chi tiêu:**\n   • Cửa hàng: Trader Joe's\n   • Số tiền: 45,000đ\n   • Ngày: 2025-10-15\n   • Danh mục: Ăn uống\n\nBạn có muốn thay đổi thông tin nào không?",
+  "extracted_expense": null,
+  "requires_confirmation": false,
+  "asking_confirmation": true,
+  "saved_expense": {
+    "id": "exp-123",
     "merchant_name": "Trader Joe's",
-    "amount": 45.0,
+    "amount": 45000,
     "date": "2025-10-15",
-    "confidence": 0.85,
-    "description": "I spent $45 at Trader Joe's yesterday",
-    "suggested_category_id": "cat-001",
-    "suggested_category_name": "Ăn uống",
-    "categorization_confidence": 0.92
+    "category_id": "cat-001"
   },
-  "requires_confirmation": true,
   "budget_warning": null,
   "advice": null
 }
 ```
+
+**Response 200 (Second Turn - No Changes)**
+User sends: `{"content": "Không, thông tin đó đúng rồi", "message_type": "text"}`
+```json
+{
+  "message_id": "msg-790",
+  "response": "Được rồi! Chi tiêu của bạn đã được lưu vào hệ thống. Bạn có thể tiếp tục nhập chi tiêu khác hoặc tôi có thể giúp gì khác không?",
+  "extracted_expense": null,
+  "requires_confirmation": false,
+  "asking_confirmation": false,
+  "saved_expense": null,
+  "budget_warning": null,
+  "advice": null
+}
+```
+
+**Response 200 (Second Turn - With Corrections)**
+User sends: `{"content": "Thay đổi số tiền thành 50000", "message_type": "text"}`
+```json
+{
+  "message_id": "msg-791",
+  "response": "✅ Tôi đã cập nhật chi tiêu với các thay đổi sau:\n   • Số tiền: 50,000đ\n\nThông tin đã được lưu lại vào hệ thống.",
+  "extracted_expense": null,
+  "requires_confirmation": false,
+  "asking_confirmation": false,
+  "saved_expense": null,
+  "budget_warning": null,
+  "advice": null
+}
+```
+
+**Response Schema Details:**
+- `asking_confirmation` (bool): `true` when agent is asking for confirmation/corrections; `false` when processing complete
+- `saved_expense` (object|null): Populated when `asking_confirmation=true`. Contains:
+  - `id`: Expense ID in database
+  - `merchant_name`: Merchant/store name
+  - `amount`: Amount in original currency
+  - `date`: Expense date (YYYY-MM-DD format)
+  - `category_id`: Category assigned to the expense
+- Multi-turn flow:
+  1. User sends expense info → Agent saves and asks confirmation (`asking_confirmation=true`)
+  2. User sends response ("No" or corrections) → Agent processes intent and returns final message (`asking_confirmation=false`)
 
 **Auto-Categorization in Chat**: The AI agent automatically:
 - Extracts merchant name and description from user input
 - Calls LLM to categorize the expense against Vietnamese categories
 - Returns both the suggested category and a confidence score
 - Presents the categorization to the user for confirmation or correction
+
+**Confirmation Flow (NEW)**: After saving an expense:
+- Agent responds with `asking_confirmation=true` and saved expense details
+- User can provide corrections like "Thay đổi số tiền" or "Sửa ngày"
+- Agent uses `gemini-2.5-flash-lite` to detect update intent and extract corrections
+- Corrections are validated and applied through `ExpenseProcessingService.update_expense`
+- All corrections are stored as feedback for future learning

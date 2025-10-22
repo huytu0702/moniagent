@@ -205,10 +205,10 @@ Hãy trả về JSON không có markdown:"""
             Initial message string
         """
         return (
-            "Hello! I'm your AI assistant for expense tracking. You can:\n"
-            "1. Upload an invoice image for me to extract the details\n"
-            "2. Type out your expense (e.g., 'I spent $25 at Starbucks')\n\n"
-            "What would you like to do?"
+            "Xin chào! Tôi là trợ lý AI của bạn để quản lý chi tiêu. Bạn có thể:\n"
+            "1. Tải ảnh hoá đơn để tôi trích xuất thông tin\n"
+            "2. Nhập chi tiêu của bạn (ví dụ: 'Tôi vừa mua cà phê 25,000đ')\n\n"
+            "Bạn muốn làm gì?"
         )
 
     def process_message(
@@ -218,6 +218,8 @@ Hãy trả về JSON không có markdown:"""
         Optional[Dict[str, Any]],
         Optional[Dict[str, Any]],
         Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+        bool,
     ]:
         """
         Process a user message using LangGraph AI agent and generate a response
@@ -228,7 +230,8 @@ Hãy trả về JSON không có markdown:"""
             message_type: Type of message ('text' or 'image')
 
         Returns:
-            Tuple of (response_text, extracted_expense_data, budget_warning, financial_advice)
+            Tuple of (response_text, extracted_expense_data, budget_warning,
+                     financial_advice, saved_expense, asking_confirmation)
         """
         try:
             if not self.db_session:
@@ -268,6 +271,8 @@ Hãy trả về JSON không có markdown:"""
                 result.get("extracted_expense"),
                 result.get("budget_warning"),
                 result.get("financial_advice"),
+                result.get("saved_expense"),
+                result.get("asking_confirmation", False),
             )
 
         except Exception as e:
@@ -576,6 +581,287 @@ Hãy trả về JSON không có markdown:"""
                 "I encountered an error processing your request. Please try again.",
                 None,
             )
+
+    def handle_update_confirmation(
+        self,
+        session_id: str,
+        user_message: str,
+        saved_expense: Dict[str, Any],
+        user_id: str,
+    ) -> Tuple[
+        str,
+        Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+    ]:
+        """
+        Handle user's response to confirmation question (do they want to update?)
+
+        Args:
+            session_id: Chat session ID
+            user_message: User's response message
+            saved_expense: The expense that was just saved
+            user_id: User ID
+
+        Returns:
+            Tuple of (response_text, corrections_dict, budget_warning, financial_advice)
+        """
+        try:
+            logger.info(
+                f"Handling update confirmation for session {session_id}, expense {saved_expense.get('id')}"
+            )
+
+            # Detect if user wants to update
+            wants_update, corrections = self.detect_update_intent(user_message)
+
+            if not wants_update:
+                # User doesn't want to update
+                response_text = (
+                    "Được rồi! Chi tiêu của bạn đã được lưu vào hệ thống. "
+                    "Bạn có thể tiếp tục nhập chi tiêu khác hoặc tôi có thể giúp gì khác không?"
+                )
+                return response_text, None, None, None
+
+            # User wants to update
+            if not corrections:
+                # Ask for clarification
+                response_text = (
+                    "Tôi muốn giúp bạn, nhưng tôi không rõ bạn muốn thay đổi gì. "
+                    "Vui lòng nêu rõ bạn muốn thay đổi:\n"
+                    "• Tên cửa hàng\n"
+                    "• Số tiền\n"
+                    "• Ngày giao dịch"
+                )
+                return response_text, None, None, None
+
+            # Apply the corrections
+            logger.info(f"Applying corrections: {corrections}")
+
+            updated_expense, budget_warning = self.expense_service.update_expense(
+                expense_id=saved_expense.get("id"),
+                user_id=user_id,
+                corrections=corrections,
+                store_learning=True,
+                return_budget_warning=True,
+            )
+
+            # Build response
+            response_parts = ["✅ Tôi đã cập nhật chi tiêu với các thay đổi sau:"]
+
+            if "merchant_name" in corrections:
+                response_parts.append(f"   • Cửa hàng: {corrections['merchant_name']}")
+            if "amount" in corrections:
+                response_parts.append(f"   • Số tiền: {corrections['amount']:,.0f}đ")
+            if "date" in corrections:
+                response_parts.append(f"   • Ngày: {corrections['date']}")
+
+            response_parts.append("\nThông tin đã được lưu lại vào hệ thống.")
+
+            # Get financial advice if there's a budget warning
+            financial_advice = None
+            if budget_warning:
+                response_parts.append(
+                    f"\n⚠️ {budget_warning.get('message', 'Cảnh báo ngân sách')}"
+                )
+
+                try:
+                    logger.info(f"Budget warning detected, generating financial advice")
+                    financial_advice = self.advice_service.get_financial_advice(
+                        user_id=user_id,
+                        period="monthly",
+                        db_session=self.db_session,
+                    )
+
+                    if financial_advice and financial_advice.get("advice"):
+                        response_parts.append(
+                            f"\n💡 Gợi ý tài chính: {financial_advice['advice']}"
+                        )
+
+                        if financial_advice.get("recommendations"):
+                            response_parts.append("\nCác khuyến nghị:")
+                            for rec in financial_advice["recommendations"][:3]:
+                                response_parts.append(f"  • {rec}")
+                except Exception as advice_error:
+                    logger.warning(
+                        f"Failed to generate financial advice: {str(advice_error)}"
+                    )
+
+            response_text = "\n".join(response_parts)
+
+            return response_text, corrections, budget_warning, financial_advice
+
+        except ValidationError as e:
+            logger.error(f"Validation error handling confirmation: {str(e)}")
+            return (
+                f"Tôi không thể áp dụng những thay đổi: {str(e)}",
+                None,
+                None,
+                None,
+            )
+        except Exception as e:
+            logger.error(f"Error handling update confirmation: {str(e)}")
+            return (
+                "Tôi gặp lỗi khi xử lý yêu cầu của bạn. Vui lòng thử lại.",
+                None,
+                None,
+                None,
+            )
+
+    def detect_update_intent(
+        self, user_message: str
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """
+        Detect if user wants to update expense using Gemini 2.5 Flash Lite model
+
+        Args:
+            user_message: User's response message
+
+        Returns:
+            Tuple of (wants_update: bool, corrections_dict: Optional[Dict])
+        """
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            from langchain_core.messages import HumanMessage
+
+            # Use lite model for lightweight intent detection
+            lite_model = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash-lite", temperature=0.1
+            )
+
+            intent_prompt = f"""Phân tích ý định của người dùng:
+
+Người dùng vừa được thông báo rằng chi tiêu đã được lưu và hỏi có muốn thay đổi thông tin không.
+Bây giờ người dùng trả lời: "{user_message}"
+
+Hãy xác định:
+1. Người dùng có muốn chỉnh sửa thông tin không? (true/false)
+2. Nếu có, hãy trích xuất những thay đổi mà người dùng muốn:
+   - merchant_name: (tên cửa hàng mới nếu có, để null nếu không)
+   - amount: (số tiền mới nếu có, để null nếu không)
+   - date: (ngày mới nếu có, để null nếu không, format: YYYY-MM-DD)
+
+Trả về JSON format (không markdown):
+{{
+  "wants_update": true/false,
+  "corrections": {{
+    "merchant_name": "...",
+    "amount": 123.45,
+    "date": "2025-10-22"
+  }}
+}}
+
+Chỉ trả về JSON."""
+
+            response = lite_model.invoke([HumanMessage(content=intent_prompt)])
+            response_text = response.content.strip()
+
+            logger.info(f"Intent detection response: {response_text}")
+
+            # Parse JSON response
+            try:
+                # Clean up markdown if present
+                if "```json" in response_text:
+                    response_text = (
+                        response_text.split("```json")[1].split("```")[0].strip()
+                    )
+                elif "```" in response_text:
+                    response_text = (
+                        response_text.split("```")[1].split("```")[0].strip()
+                    )
+
+                intent_data = json.loads(response_text)
+                wants_update = intent_data.get("wants_update", False)
+
+                # Clean up corrections - only keep non-null values
+                raw_corrections = intent_data.get("corrections", {})
+                corrections = {
+                    k: v for k, v in raw_corrections.items() if v is not None
+                }
+
+                logger.info(
+                    f"Detected wants_update={wants_update}, corrections={corrections}"
+                )
+
+                return wants_update, corrections if corrections else None
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse intent response: {str(e)}")
+
+                # Fallback: keyword matching
+                keywords_update = ["thay", "sửa", "đổi", "chỉnh", "lại", "khác", "sai"]
+                wants_update = any(kw in user_message.lower() for kw in keywords_update)
+
+                logger.info(f"Using keyword fallback: wants_update={wants_update}")
+                return wants_update, None
+
+        except Exception as e:
+            logger.error(f"Error detecting update intent: {str(e)}")
+            return False, None
+
+    def extract_corrections_from_message(
+        self, user_message: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Extract correction details from user's message
+
+        Args:
+            user_message: User message containing corrections
+
+        Returns:
+            Dictionary with corrections or None
+        """
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            from langchain_core.messages import HumanMessage
+
+            lite_model = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash-lite", temperature=0.1
+            )
+
+            extraction_prompt = f"""Trích xuất thông tin chỉnh sửa từ tin nhắn sau:
+
+"{user_message}"
+
+Nếu có, hãy trích xuất:
+- merchant_name: Tên cửa hàng/địa điểm mới
+- amount: Số tiền mới (chỉ số, không cần ký hiệu đơn vị)
+- date: Ngày mới (định dạng YYYY-MM-DD)
+
+Trả về JSON (không markdown):
+{{
+  "merchant_name": "...",
+  "amount": 123.45,
+  "date": "2025-10-22"
+}}
+
+Để null cho các trường không có thông tin."""
+
+            response = lite_model.invoke([HumanMessage(content=extraction_prompt)])
+            response_text = response.content.strip()
+
+            # Parse JSON
+            try:
+                if "```json" in response_text:
+                    response_text = (
+                        response_text.split("```json")[1].split("```")[0].strip()
+                    )
+                elif "```" in response_text:
+                    response_text = (
+                        response_text.split("```")[1].split("```")[0].strip()
+                    )
+
+                corrections = json.loads(response_text)
+
+                # Filter out null values
+                return {k: v for k, v in corrections.items() if v is not None}
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse corrections: {str(e)}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error extracting corrections: {str(e)}")
+            return None
 
     def close_session(self, session_id: str) -> ChatSession:
         """

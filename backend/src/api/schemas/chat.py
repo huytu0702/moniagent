@@ -125,6 +125,12 @@ class ChatMessageResponse(BaseModel):
     requires_confirmation: bool = Field(
         False, description="Whether expense requires user confirmation"
     )
+    asking_confirmation: bool = Field(
+        False, description="Whether agent is asking for confirmation/update"
+    )
+    saved_expense: Optional[dict] = Field(
+        None, description="Details of saved expense (when asking_confirmation=True)"
+    )
     budget_warning: Optional[str] = None
     advice: Optional[str] = None
 
@@ -142,6 +148,8 @@ class ChatMessageResponse(BaseModel):
                     "categorization_confidence": 0.9,
                 },
                 "requires_confirmation": True,
+                "asking_confirmation": False,
+                "saved_expense": None,
                 "budget_warning": None,
                 "advice": None,
             }

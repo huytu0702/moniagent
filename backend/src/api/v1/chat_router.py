@@ -86,12 +86,17 @@ async def send_chat_message(
         logger.info(f"Processing message for session {session_id}, user {user_id}")
 
         ai_service = AIAgentService(db)
-        response_text, extracted_expense, budget_warning, advice = (
-            ai_service.process_message(
-                session_id=session_id,
-                user_message=request.content,
-                message_type=request.message_type,
-            )
+        (
+            response_text,
+            extracted_expense,
+            budget_warning,
+            advice,
+            saved_expense,
+            asking_confirmation,
+        ) = ai_service.process_message(
+            session_id=session_id,
+            user_message=request.content,
+            message_type=request.message_type,
         )
 
         # Build response
@@ -99,6 +104,8 @@ async def send_chat_message(
             message_id=f"msg-{session_id}",
             response=response_text,
             requires_confirmation=extracted_expense is not None,
+            asking_confirmation=asking_confirmation,
+            saved_expense=saved_expense,
             budget_warning=budget_warning.get("message") if budget_warning else None,
             advice=advice,
         )
