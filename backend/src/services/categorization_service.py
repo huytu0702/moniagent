@@ -396,3 +396,232 @@ class CategorizationService:
         except Exception as e:
             logger.error(f"Error retrieving feedback history: {str(e)}")
             raise CategorizationServiceError(f"Error retrieving history: {str(e)}")
+
+    def initialize_vietnamese_categorization_rules(
+        self, user_id: str, db_session: Session = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Initialize Vietnamese categorization rules for a user
+        Maps Vietnamese keywords to categories for automatic categorization
+
+        Args:
+            user_id: User ID
+            db_session: Database session
+
+        Returns:
+            List of created rules
+        """
+        try:
+            if not db_session:
+                raise CategorizationServiceError("Database session required")
+
+            logger.info(
+                f"Initializing Vietnamese categorization rules for user {user_id}"
+            )
+
+            # Define Vietnamese categorization rules
+            # Each category maps to common keywords in Vietnamese
+            vietnamese_rules = {
+                "Ăn uống": [
+                    ("starbucks", 0.95),
+                    ("cafe", 0.9),
+                    ("cơm", 0.85),
+                    ("nhà hàng", 0.9),
+                    ("quán", 0.85),
+                    ("ăn", 0.7),
+                    ("phở", 0.95),
+                    ("bún", 0.95),
+                    ("cơm tấm", 0.95),
+                    ("bánh", 0.85),
+                    ("pizza", 0.95),
+                    ("burger", 0.95),
+                    ("bánh mì", 0.95),
+                    ("trà sữa", 0.95),
+                    ("nước", 0.7),
+                    ("restaurant", 0.9),
+                    ("food", 0.85),
+                    ("grocery", 0.8),
+                    ("market", 0.75),
+                    ("supermarket", 0.8),
+                ],
+                "Đi lại": [
+                    ("grab", 0.95),
+                    ("xăng", 0.9),
+                    ("xe", 0.7),
+                    ("xế", 0.8),
+                    ("uber", 0.95),
+                    ("taxi", 0.95),
+                    ("bảo dưỡng", 0.9),
+                    ("sửa xe", 0.85),
+                    ("vé xe", 0.9),
+                    ("tàu", 0.85),
+                    ("bay", 0.85),
+                    ("gas", 0.85),
+                    ("parking", 0.8),
+                    ("car", 0.7),
+                    ("auto", 0.7),
+                ],
+                "Nhà ở": [
+                    ("nhà", 0.7),
+                    ("thuê", 0.7),
+                    ("điện", 0.8),
+                    ("nước", 0.75),
+                    ("internet", 0.9),
+                    ("wifi", 0.85),
+                    ("công ty cấp nước", 0.95),
+                    ("evn", 0.95),
+                    ("điện nước", 0.9),
+                    ("sửa chữa", 0.7),
+                    ("cửa cái", 0.75),
+                ],
+                "Mua sắm cá nhân": [
+                    ("quần áo", 0.95),
+                    ("áo", 0.7),
+                    ("quần", 0.8),
+                    ("giày", 0.9),
+                    ("mỹ phẩm", 0.95),
+                    ("makeup", 0.95),
+                    ("cosmetic", 0.9),
+                    ("skincare", 0.95),
+                    ("điện thoại", 0.95),
+                    ("laptop", 0.95),
+                    ("computer", 0.9),
+                    ("máy tính", 0.95),
+                    ("fashion", 0.85),
+                    ("shopping", 0.75),
+                    ("shop", 0.65),
+                    ("store", 0.65),
+                    ("mall", 0.7),
+                ],
+                "Giải trí & du lịch": [
+                    ("phim", 0.9),
+                    ("cinema", 0.95),
+                    ("xem phim", 0.95),
+                    ("game", 0.85),
+                    ("gaming", 0.9),
+                    ("play", 0.65),
+                    ("du lịch", 0.95),
+                    ("travel", 0.9),
+                    ("hotel", 0.85),
+                    ("resort", 0.9),
+                    ("tour", 0.9),
+                    ("vé máy bay", 0.95),
+                    ("ticket", 0.75),
+                    ("entertainment", 0.8),
+                    ("spotify", 0.95),
+                    ("netflix", 0.95),
+                    ("concert", 0.95),
+                ],
+                "Giáo dục & học tập": [
+                    ("học phí", 0.95),
+                    ("trường", 0.8),
+                    ("sách", 0.9),
+                    ("vở", 0.9),
+                    ("học", 0.65),
+                    ("khóa học", 0.95),
+                    ("course", 0.9),
+                    ("training", 0.85),
+                    ("udemy", 0.95),
+                    ("education", 0.85),
+                    ("school", 0.85),
+                    ("university", 0.85),
+                ],
+                "Sức khỏe & thể thao": [
+                    ("thuốc", 0.95),
+                    ("bệnh", 0.85),
+                    ("bệnh viện", 0.95),
+                    ("khám bệnh", 0.95),
+                    ("doctor", 0.9),
+                    ("hospital", 0.95),
+                    ("gym", 0.95),
+                    ("fitness", 0.95),
+                    ("thể dục", 0.9),
+                    ("yoga", 0.9),
+                    ("medicine", 0.9),
+                    ("clinic", 0.9),
+                    ("pharmacy", 0.9),
+                ],
+                "Gia đình & quà tặng": [
+                    ("quà", 0.85),
+                    ("lễ tết", 0.95),
+                    ("tết", 0.85),
+                    ("hiếu hỉ", 0.95),
+                    ("sinh nhật", 0.9),
+                    ("gia đình", 0.7),
+                    ("gift", 0.85),
+                    ("family", 0.65),
+                ],
+                "Đầu tư & tiết kiệm": [
+                    ("cổ phiếu", 0.95),
+                    ("stock", 0.95),
+                    ("gửi tiết kiệm", 0.95),
+                    ("tiết kiệm", 0.9),
+                    ("ngân hàng", 0.8),
+                    ("bank", 0.75),
+                    ("investment", 0.9),
+                    ("crypto", 0.9),
+                    ("bitcoin", 0.95),
+                ],
+            }
+
+            created_rules = []
+
+            # Get user's categories
+            user_categories = (
+                db_session.query(Category).filter(Category.user_id == user_id).all()
+            )
+
+            # Create a mapping of category names to IDs
+            category_map = {cat.name: cat.id for cat in user_categories}
+
+            for category_name, keywords in vietnamese_rules.items():
+                if category_name not in category_map:
+                    logger.warning(
+                        f"Category '{category_name}' not found for user {user_id}"
+                    )
+                    continue
+
+                category_id = category_map[category_name]
+
+                for keyword, confidence_threshold in keywords:
+                    # Check if rule already exists
+                    existing_rule = (
+                        db_session.query(ExpenseCategorizationRule)
+                        .filter(
+                            ExpenseCategorizationRule.user_id == user_id,
+                            ExpenseCategorizationRule.category_id == category_id,
+                            ExpenseCategorizationRule.store_name_pattern == keyword,
+                        )
+                        .first()
+                    )
+
+                    if not existing_rule:
+                        rule = ExpenseCategorizationRule(
+                            user_id=user_id,
+                            category_id=category_id,
+                            store_name_pattern=keyword,
+                            rule_type="keyword",
+                            confidence_threshold=confidence_threshold,
+                            is_active=True,
+                        )
+                        db_session.add(rule)
+                        created_rules.append(
+                            {
+                                "category": category_name,
+                                "keyword": keyword,
+                                "confidence": confidence_threshold,
+                            }
+                        )
+
+            db_session.commit()
+            logger.info(
+                f"Created {len(created_rules)} categorization rules for user {user_id}"
+            )
+
+            return created_rules
+
+        except Exception as e:
+            logger.error(f"Error initializing Vietnamese rules: {str(e)}")
+            if db_session:
+                db_session.rollback()
+            raise CategorizationServiceError(f"Error initializing rules: {str(e)}")

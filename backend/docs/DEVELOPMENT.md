@@ -65,43 +65,25 @@ backend/
 - `src/core/database.py` builds a connection string from `DATABASE_URL` or Supabase credentials; without those it falls back to `sqlite:///./test.db` (created in the repo root).  
 - When running Postgres, provide `SUPABASE_URL` and `SUPABASE_DB_PASSWORD` to form the DSN automatically.  
 - Models live under `src/models/` and use SQLAlchemy declarative base; remember to run migrations/DDL externally.
+- **Vietnamese Categories**: When a new user registers, 10 Vietnamese system categories and 60-122 keyword-based rules are automatically initialized via `CategoryService.initialize_user_categories()` and `CategorizationService.initialize_vietnamese_categorization_rules()`.
+- **LLM Categorization**: Expenses are auto-categorized using Gemini 2.5 Flash with a prompt listing all user's Vietnamese categories. Falls back to keyword-based matching if LLM fails.
 
 ## Auth & Environment
-- JWT secret is required (`JWT_SECRET`).  
-- Development shortcut: requests authenticated with bearer token `mock-token-for-development` resolve to a stub user when `ENV=development`.  
-- CORS defaults to allow all origins in development and a restricted list otherwise (see `src/api/main.py`).
-
-## Quality Gates
-- **Ruff** handles linting and import sorting (configured via `ruff.toml`).  
-- **Black** formats with line length 88 (configured via `pyproject.black`).  
-- **mypy** enforces typing in `src/` (configuration in `mypy.ini`).  
-- Optional pre-commit hooks are defined in `.pre-commit-config.yaml`; enable via `pre-commit install`.
+- JWT secret is required (`
 
 ## Testing
 - Unit tests focus on service logic with mocks (see `tests/unit/`).  
 - Integration tests target API routes or real DB sessions (`tests/integration/`).  
 - Contract/security/performance folders exist for future suites; populate with scenarios before Phase 6.  
+- **Vietnamese Categories Testing**: See `tests/integration/test_vietnamese_categories.py` for tests covering:
+  - System categories creation and initialization
+  - User categories auto-population on registration
+  - Categorization rules creation
+  - LLM-based categorization flows
 - Tips:
   ```bash
   pytest -k ocr_service -vv        # Filter by keyword
+  pytest tests/integration/test_vietnamese_categories.py -v  # Vietnamese categories
   pytest --maxfail=1 --disable-warnings
   pytest --cov=src --cov-report=term-missing
   ```
-
-## Debugging & Tooling
-- Enable SQL echo logs by exporting `SQLALCHEMY_ECHO=1` or editing `database.py` when running locally.  
-- To inspect routes quickly:
-  ```bash
-  python -c "from src.api.main import app; [print(r.path) for r in app.routes]"
-  ```
-- For ad-hoc LangGraph runs, instantiate `LangGraphAIAgent` with a session from `get_db()` inside a REPL or notebook.
-
-## Workflows & Tips
-- Use `ExpenseProcessingService` or `BudgetManagementService` directly in tests by creating a session fixture (see `tests/conftest.py`).  
-- Invoice uploads expect JPEG/PNG and stream data through `OCRService`; when running without a Gemini key, mock the service to keep tests deterministic.  
-- Several services (budgets, aggregation, advice) fall back to canned data if `db_session` is omitted; use this behaviour for quick demos but prefer real sessions for integration tests.
-
-## Deployment Reminders
-- Compile environment variables for each environment (`.env.production`, `.env.staging`, etc.).  
-- Configure HTTPS termination and ensure the `Strict-Transport-Security` header from `src/api/main.py` remains in place.  
-- Attach background workers or lifespan startups if you plan to enable tasks defined in `scheduler.py`.

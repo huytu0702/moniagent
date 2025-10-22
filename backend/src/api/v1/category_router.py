@@ -26,6 +26,10 @@ from src.services.categorization_service import (
 from src.core.database import get_db
 from src.core.security import get_current_user
 from src.models.user import User
+from src.models.category import Category
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/categories", tags=["categories"])
@@ -286,4 +290,75 @@ async def confirm_categorization(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error confirming categorization: {str(e)}",
+        )
+
+
+@router.get("", response_model=List[CategoryResponse])
+async def list_categories(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List all categories for the current user"""
+    try:
+        categories = (
+            db.query(Category)
+            .filter(Category.user_id == current_user.id)
+            .order_by(Category.display_order)
+            .all()
+        )
+        return [c.to_dict() for c in categories]
+    except Exception as e:
+        logger.error(f"Error listing categories: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list categories: {str(e)}",
+        )
+
+
+@router.post("/initialize-vietnamese", response_model=dict)
+async def initialize_vietnamese_categories(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Initialize Vietnamese categories and categorization rules for the current user
+
+    This endpoint creates:
+    - 10 Vietnamese expense categories with icons and colors
+    - 170+ categorization rules for automatic expense categorization
+    """
+    try:
+        from src.services.category_service import CategoryService
+        from src.services.categorization_service import CategorizationService
+
+        category_service = CategoryService(db)
+        categorization_service = CategorizationService()
+
+        # Initialize categories
+        categories = category_service.initialize_user_categories(str(current_user.id))
+        logger.info(
+            f"Initialized {len(categories)} categories for user {current_user.id}"
+        )
+
+        # Initialize categorization rules
+        rules = categorization_service.initialize_vietnamese_categorization_rules(
+            str(current_user.id), db_session=db
+        )
+        logger.info(
+            f"Initialized {len(rules)} categorization rules for user {current_user.id}"
+        )
+
+        return {
+            "status": "success",
+            "message": f"Initialized {len(categories)} categories and {len(rules)} categorization rules",
+            "categories_created": len(categories),
+            "rules_created": len(rules),
+            "categories": [c.to_dict() for c in categories],
+        }
+
+    except Exception as e:
+        logger.error(f"Error initializing Vietnamese categories: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initialize categories: {str(e)}",
         )

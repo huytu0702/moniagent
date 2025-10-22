@@ -36,11 +36,11 @@ class ExpenseProcessingService:
         self, text: str, user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Extract expense information from text input and auto-suggest category if user_id provided
+        Extract expense information from text input and auto-suggest category using LLM
 
         Args:
             text: Text containing expense information
-            user_id: Optional user ID to enable auto-categorization
+            user_id: Optional user ID to enable LLM-based auto-categorization
 
         Returns:
             Dictionary with extracted expense data including optional category_id and confidence_score
@@ -95,74 +95,123 @@ class ExpenseProcessingService:
             if expense_data["amount"]:
                 expense_data["confidence"] = 0.7
 
-            # Auto-suggest category if user_id provided
+            # Auto-categorize using LLM if user_id provided
             if user_id and expense_data.get("merchant_name"):
                 try:
                     logger.info(
-                        f"Attempting to auto-categorize expense from '{expense_data.get('merchant_name')}' for user {user_id}"
-                    )
-                    # Create temporary expense to get suggestion
-                    # Note: This is used only for categorization suggestion before saving
-                    categorization_service = CategorizationService()
-
-                    # Get user's categorization rules
-                    from src.models.expense_categorization_rule import (
-                        ExpenseCategorizationRule,
+                        f"Attempting to categorize expense from '{expense_data.get('merchant_name')}' using LLM for user {user_id}"
                     )
 
-                    rules = []
+                    # Import AIAgentService to use LLM categorization
+                    # Note: We need to pass db_session to AIAgentService
                     if self.db_session:
-                        rules = (
-                            self.db_session.query(ExpenseCategorizationRule)
-                            .filter(
-                                ExpenseCategorizationRule.user_id == user_id,
-                                ExpenseCategorizationRule.is_active == True,
+                        from src.services.ai_agent_service import AIAgentService
+
+                        ai_service = AIAgentService(self.db_session)
+                        category_id, confidence = (
+                            ai_service.categorize_expense_with_llm(
+                                user_id=user_id,
+                                merchant_name=expense_data.get("merchant_name"),
+                                description=expense_data.get("description"),
+                                amount=expense_data.get("amount", 0),
                             )
-                            .all()
                         )
 
-                    if rules:
-                        # Try to match rules against merchant name
-                        best_match = None
-                        best_confidence = 0.0
-
-                        for rule in rules:
-                            confidence = categorization_service._match_rule_for_text(
-                                expense_data.get("merchant_name"), rule
+                        if category_id:
+                            expense_data["category_id"] = category_id
+                            expense_data["suggested_category_id"] = category_id
+                            expense_data["categorization_confidence"] = (
+                                confidence or 0.8
                             )
-                            if confidence > best_confidence:
-                                best_confidence = confidence
-                                best_match = rule
-
-                        # If we found a good match, add category suggestion
-                        if (
-                            best_match
-                            and best_confidence >= best_match.confidence_threshold
-                        ):
-                            expense_data["category_id"] = best_match.category_id
-                            expense_data["suggested_category_id"] = (
-                                best_match.category_id
-                            )
-                            expense_data["categorization_confidence"] = best_confidence
                             logger.info(
-                                f"Auto-suggested category {best_match.category_id} with confidence {best_confidence}"
+                                f"LLM categorized expense to {category_id} with confidence {confidence}"
                             )
+                        else:
+                            # Fallback to keyword rules if LLM fails
+                            logger.warning(
+                                "LLM categorization failed, falling back to keyword rules"
+                            )
+                            self._categorize_with_keywords(user_id, expense_data)
                     else:
-                        logger.debug(
-                            f"No categorization rules found for user {user_id}"
-                        )
+                        logger.warning("No DB session available for LLM categorization")
+                        self._categorize_with_keywords(user_id, expense_data)
 
                 except Exception as e:
                     # Don't fail extraction if categorization fails
                     logger.warning(
                         f"Auto-categorization failed (non-blocking): {str(e)}"
                     )
+                    # Fallback to keyword rules
+                    self._categorize_with_keywords(user_id, expense_data)
 
             return expense_data
 
         except Exception as e:
             logger.error(f"Error extracting expense from text: {str(e)}")
             raise ValidationError(f"Failed to extract expense from text: {str(e)}")
+
+    def _categorize_with_keywords(
+        self, user_id: str, expense_data: Dict[str, Any]
+    ) -> None:
+        """
+        Fallback categorization using keyword rules when LLM fails
+
+        Args:
+            user_id: User ID
+            expense_data: Expense data dictionary to update with category
+        """
+        try:
+            if not self.db_session:
+                return
+
+            logger.info(
+                f"Using keyword-based categorization for '{expense_data.get('merchant_name')}'"
+            )
+
+            categorization_service = CategorizationService()
+
+            # Get user's categorization rules
+            from src.models.expense_categorization_rule import (
+                ExpenseCategorizationRule,
+            )
+
+            rules = (
+                self.db_session.query(ExpenseCategorizationRule)
+                .filter(
+                    ExpenseCategorizationRule.user_id == user_id,
+                    ExpenseCategorizationRule.is_active == True,
+                )
+                .all()
+            )
+
+            if rules:
+                # Try to match rules against merchant name
+                best_match = None
+                best_confidence = 0.0
+
+                for rule in rules:
+                    confidence = categorization_service._match_rule_for_text(
+                        expense_data.get("merchant_name"), rule
+                    )
+                    if confidence > best_confidence:
+                        best_confidence = confidence
+                        best_match = rule
+
+                # If we found a good match, add category suggestion
+                if best_match and best_confidence >= best_match.confidence_threshold:
+                    expense_data["category_id"] = best_match.category_id
+                    expense_data["suggested_category_id"] = best_match.category_id
+                    expense_data["categorization_confidence"] = best_confidence
+                    logger.info(
+                        f"Keyword categorized to {best_match.category_id} with confidence {best_confidence}"
+                    )
+            else:
+                logger.debug(f"No categorization rules found for user {user_id}")
+
+        except Exception as e:
+            logger.warning(
+                f"Keyword categorization fallback failed (non-blocking): {str(e)}"
+            )
 
     def extract_expense_from_image(self, image_data) -> Dict[str, Any]:
         """

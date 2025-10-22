@@ -55,6 +55,25 @@ username=user@example.com&password=SecurePass123!
 }
 ```
 
+### Initialize Vietnamese Categories (Auto-called on Registration)
+```http
+POST /auth/init-vietnamese-data
+Content-Type: application/json
+```
+**Response 200**
+```json
+{
+  "status": "success",
+  "message": "Vietnamese categories and rules initialized",
+  "categories_count": 10,
+  "rules_created": 60
+}
+```
+This endpoint is automatically invoked when a new user registers, but can also be called manually for existing users to initialize or update their categories. It:
+- Copies 10 Vietnamese system categories
+- Creates 60-122 keyword-based categorization rules
+- Enables LLM-based auto-categorization
+
 ## Invoice Routes
 
 ### Process Invoice (OCR)
@@ -116,7 +135,7 @@ Content-Type: application/json
   "merchant_name": "Starbucks",
   "amount": 8.75,
   "date": "2025-10-16",
-  "category_id": "cat-coffee",
+  "category_id": "cat-001",
   "description": "Morning latte"
 }
 ```
@@ -128,14 +147,23 @@ Content-Type: application/json
   "merchant_name": "Starbucks",
   "amount": 8.75,
   "date": "2025-10-16",
-  "category_id": "cat-coffee",
+  "category_id": "cat-001",
+  "category_name": "Ăn uống",
   "description": "Morning latte",
   "confirmed_by_user": true,
   "source_type": "manual",
+  "categorization_confidence": 0.95,
   "created_at": "2025-10-16T08:42:00Z",
   "updated_at": "2025-10-16T08:42:00Z"
 }
 ```
+
+**Auto-Categorization**: When the category_id is omitted, the system automatically:
+- Uses LLM (Gemini 2.5 Flash) to analyze merchant_name and description against all user's categories
+- Returns the best matching category with a confidence score (0.0-1.0)
+- Falls back to keyword-based rules if LLM categorization fails
+- Stores the categorization_confidence in the expense record
+
 Validation errors return 422; other failures return 400.
 
 ### List Expenses
@@ -237,20 +265,46 @@ Authorization: Bearer <token>
 {
   "categories": [
     {
-      "id": "cat-coffee",
+      "id": "cat-001",
       "user_id": "user-456",
-      "name": "Coffee",
-      "description": "Cafe spending",
-      "icon": "coffee",
-      "color": "#6f4e37",
-      "is_system_category": false,
+      "name": "Ăn uống",
+      "description": "Ăn ngoài, đi chợ, cafe, nước uống",
+      "icon": "🍜",
+      "color": "#FF6B6B",
+      "is_system_category": true,
       "display_order": 1,
+      "created_at": "2025-10-01T12:00:00Z",
+      "updated_at": "2025-10-10T09:30:00Z"
+    },
+    {
+      "id": "cat-002",
+      "user_id": "user-456",
+      "name": "Đi lại",
+      "description": "Xăng xe, Grab, vé xe, bảo dưỡng",
+      "icon": "🚗",
+      "color": "#4ECDC4",
+      "is_system_category": true,
+      "display_order": 2,
       "created_at": "2025-10-01T12:00:00Z",
       "updated_at": "2025-10-10T09:30:00Z"
     }
   ]
 }
 ```
+
+**Vietnamese Categories Available:**
+| # | Name | Icon | Color | Description |
+|---|------|------|-------|-------------|
+| 1 | Ăn uống | 🍜 | #FF6B6B | Ăn ngoài, đi chợ, cafe, nước uống |
+| 2 | Đi lại | 🚗 | #4ECDC4 | Xăng xe, Grab, vé xe, bảo dưỡng |
+| 3 | Nhà ở | 🏠 | #95E1D3 | Thuê nhà, điện, nước, internet |
+| 4 | Mua sắm cá nhân | 👕 | #F38181 | Quần áo, mỹ phẩm, đồ điện tử |
+| 5 | Giải trí & du lịch | 🎬 | #AA96DA | Xem phim, du lịch, game |
+| 6 | Giáo dục & học tập | 📚 | #FCBAD3 | Học phí, sách vở, khóa học |
+| 7 | Sức khỏe & thể thao | 💪 | #A8E6CF | Thuốc, khám bệnh, gym |
+| 8 | Gia đình & quà tặng | 🎁 | #FFD3B6 | Quà, lễ tết, hiếu hỉ |
+| 9 | Đầu tư & tiết kiệm | 💰 | #FFAAA5 | Mua cổ phiếu, gửi tiết kiệm |
+| 10 | Khác | ⚙️ | #E0E0E0 | Chi phí không thuộc nhóm trên |
 
 ### Create Category
 ```http
@@ -377,102 +431,6 @@ Returns an array of alert dictionaries. Currently emits an empty array until ale
 GET /budgets/check/{category_id}?amount=<optional>
 Authorization: Bearer <token>
 ```
-When a budget exists, the response resembles:
-```json
-{
-  "category_id": "cat-groceries",
-  "category_name": "Groceries",
-  "limit": 400.0,
-  "spent": 320.0,
-  "total_with_new_expense": 350.0,
-  "remaining": 50.0,
-  "percentage_used": 0.875,
-  "alert_threshold": 0.8,
-  "warning": true,
-  "alert_level": "medium",
-  "message": "You are approaching your budget limit for Groceries."
-}
-```
-If no budget exists, it returns:
-```json
-{
-  "category_id": "cat-groceries",
-  "has_budget": false,
-  "message": "No budget set for this category"
-}
-```
-
-### Spending Summary
-```http
-GET /spending/summary?period=daily|weekly|monthly
-Authorization: Bearer <token>
-```
-**Response 200**
-```json
-{
-  "period": "monthly",
-  "total_spending": 1500.0,
-  "by_category": [
-    {
-      "category_id": "cat-1",
-      "category_name": "Eating Out",
-      "amount": 500.0,
-      "percentage": 33.3
-    }
-  ],
-  "by_week": [
-    {
-      "week": "2025-W42",
-      "amount": 300.0,
-      "percentage": 20.0
-    }
-  ]
-}
-```
-When no database session is provided, canned demo values are returned.
-
-## AI Advice & Chat
-
-### Financial Advice
-```http
-GET /financial-advice?period=daily|weekly|monthly
-Authorization: Bearer <token>
-```
-**Response 200**
-```json
-{
-  "advice": "You are spending 33% on dining out. Consider cooking at home more often.",
-  "recommendations": [
-    "Set a weekly dining budget of $75",
-    "Prepare meals in advance to reduce impulse purchases"
-  ],
-  "spending_pattern": "high",
-  "period": "monthly",
-  "top_spending_category": "Eating Out",
-  "top_spending_amount": 500.0
-}
-```
-If the Gemini client is unavailable, a deterministic fallback advice string is returned.
-
-### Start Chat Session
-```http
-POST /chat/start
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-```json
-{
-  "session_title": "October catch-up"
-}
-```
-**Response 200**
-```json
-{
-  "session_id": "sess-123",
-  "message": "Chat session started successfully",
-  "initial_message": "Hello! I'm your AI assistant for expense tracking..."
-}
-```
 
 ### Send Message
 ```http
@@ -497,8 +455,9 @@ Content-Type: application/json
     "date": "2025-10-15",
     "confidence": 0.85,
     "description": "I spent $45 at Trader Joe's yesterday",
-    "suggested_category_id": "cat-groceries",
-    "categorization_confidence": 0.67
+    "suggested_category_id": "cat-001",
+    "suggested_category_name": "Ăn uống",
+    "categorization_confidence": 0.92
   },
   "requires_confirmation": true,
   "budget_warning": null,
@@ -506,72 +465,8 @@ Content-Type: application/json
 }
 ```
 
-### Confirm Expense (placeholder)
-```http
-POST /chat/{session_id}/confirm-expense
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-Payload mirrors `ExpenseConfirmationRequest` (`confirmed`, optional `corrections`).  
-**Response 200** currently returns
-```json
-{
-  "status": "confirmed",
-  "message": "Expense confirmed and saved",
-  "expense_id": "exp-123"
-}
-```
-This endpoint is a stub and will be replaced with real persistence logic.
-
-### Session History
-```http
-GET /chat/{session_id}/history
-Authorization: Bearer <token>
-```
-**Response 200**
-```json
-{
-  "session": {
-    "id": "sess-123",
-    "user_id": "user-456",
-    "session_title": "October catch-up",
-    "status": "active",
-    "created_at": "2025-10-16T08:00:00Z",
-    "updated_at": "2025-10-16T08:05:00Z"
-  },
-  "messages": [
-    {
-      "id": "msg-1",
-      "session_id": "sess-123",
-      "role": "user",
-      "content": "I spent $45 at Trader Joe's yesterday",
-      "created_at": "2025-10-16T08:01:00Z"
-    },
-    {
-      "id": "msg-2",
-      "session_id": "sess-123",
-      "role": "assistant",
-      "content": "I found an expense for $45.00 at Trader Joe's...",
-      "created_at": "2025-10-16T08:01:02Z"
-    }
-  ]
-}
-```
-
-### Close Session
-```http
-POST /chat/{session_id}/close
-Authorization: Bearer <token>
-```
-**Response 200**
-```json
-{
-  "status": "closed",
-  "session_id": "sess-123",
-  "message": "Chat session closed"
-}
-```
-
-## Rate Limiting & Webhooks
-- Rate limiting is not yet enforced but headers may be introduced later (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`).
-- Webhook support (`invoice.processed`, `expense.categorized`, etc.) is planned; no endpoints exist today.
+**Auto-Categorization in Chat**: The AI agent automatically:
+- Extracts merchant name and description from user input
+- Calls LLM to categorize the expense against Vietnamese categories
+- Returns both the suggested category and a confidence score
+- Presents the categorization to the user for confirmation or correction

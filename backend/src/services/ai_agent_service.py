@@ -4,7 +4,7 @@ AI Agent Service using LangGraph for managing expense tracking conversations
 
 import logging
 import json
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,7 @@ from src.services.budget_management_service import BudgetManagementService
 from src.services.financial_advice_service import FinancialAdviceService
 from src.models.expense import Expense
 from src.models.chat_session import ChatSession, ChatMessage
+from src.models.category import Category
 from src.utils.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,140 @@ class AIAgentService:
 
         if db_session:
             self.langgraph_agent = LangGraphAIAgent(db_session)
+
+    def get_user_categories(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all categories for a user to use in LLM prompts
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            List of category dictionaries
+        """
+        if not self.db_session:
+            return []
+
+        categories = (
+            self.db_session.query(Category)
+            .filter(Category.user_id == user_id)
+            .order_by(Category.display_order)
+            .all()
+        )
+
+        return [
+            {
+                "id": str(cat.id),
+                "name": cat.name,
+                "description": cat.description,
+                "icon": cat.icon,
+            }
+            for cat in categories
+        ]
+
+    def categorize_expense_with_llm(
+        self, user_id: str, merchant_name: str, description: str, amount: float
+    ) -> Tuple[Optional[str], Optional[float]]:
+        """
+        Use LLM to categorize an expense into one of user's categories
+
+        Args:
+            user_id: User ID
+            merchant_name: Merchant/store name
+            description: Expense description
+            amount: Expense amount
+
+        Returns:
+            Tuple of (category_id, confidence_score)
+        """
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            from langchain_core.messages import HumanMessage
+
+            # Get user's categories
+            categories = self.get_user_categories(user_id)
+            if not categories:
+                logger.warning(f"No categories found for user {user_id}")
+                return None, None
+
+            # Build category list for prompt
+            category_list = "\n".join(
+                [
+                    f"- {cat['name']} ({cat['icon']}): {cat['description']} [ID: {cat['id']}]"
+                    for cat in categories
+                ]
+            )
+
+            # Create detailed categorization prompt
+            prompt = f"""Bạn là một chuyên gia phân loại chi tiêu. Dựa trên thông tin chi tiêu dưới đây, hãy phân loại vào một trong các danh mục sau:
+
+{category_list}
+
+**Thông tin chi tiêu:**
+- Nơi/Cửa hàng: {merchant_name}
+- Mô tả: {description}
+- Số tiền: {amount}
+
+**Yêu cầu:**
+1. Phân loại vào danh mục phù hợp nhất
+2. Đưa ra độ tin cậy từ 0.0 đến 1.0 (1.0 là hoàn toàn chắc chắn)
+3. Trả về JSON format: {{"category_id": "ID danh mục", "category_name": "Tên danh mục", "confidence": 0.0-1.0, "reasoning": "Lý do phân loại"}}
+
+**Hướng dẫn phân loại:**
+- "Ăn uống": Cơm, cà phê, nhà hàng, quán ăn, siêu thị (thực phẩm)
+- "Đi lại": Grab, Uber, Taxi, xăng xe, bảo dưỡng, vé xe
+- "Nhà ở": Thuê nhà, tiền điện, nước, internet, wifi
+- "Mua sắm cá nhân": Quần áo, giày, mỹ phẩm, điện thoại, laptop
+- "Giải trí & du lịch": Phim, game, du lịch, khách sạn, vé máy bay, Netflix
+- "Giáo dục & học tập": Học phí, sách, khóa học online
+- "Sức khỏe & thể thao": Thuốc, bệnh viện, gym, yoga
+- "Gia đình & quà tặng": Quà tặng, lễ tết, sinh nhật
+- "Đầu tư & tiết kiệm": Cổ phiếu, gửi tiết kiệm, ngân hàng
+- "Khác": Các chi phí không thuộc nhóm trên
+
+Hãy trả về JSON không có markdown:"""
+
+            # Initialize LLM
+            model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.1)
+
+            # Get LLM response
+            response = model.invoke([HumanMessage(content=prompt)])
+            response_text = response.content.strip()
+
+            logger.info(f"LLM categorization response: {response_text}")
+
+            # Parse JSON response
+            try:
+                # Clean up markdown if present
+                if "```json" in response_text:
+                    response_text = (
+                        response_text.split("```json")[1].split("```")[0].strip()
+                    )
+                elif "```" in response_text:
+                    response_text = (
+                        response_text.split("```")[1].split("```")[0].strip()
+                    )
+
+                result = json.loads(response_text)
+
+                category_id = result.get("category_id")
+                confidence = result.get("confidence", 0.5)
+                reasoning = result.get("reasoning", "")
+
+                logger.info(
+                    f"LLM categorized expense: {result.get('category_name')} (confidence: {confidence})"
+                )
+
+                return category_id, confidence
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse LLM response: {str(e)}")
+                logger.error(f"Response was: {response_text}")
+                return None, None
+
+        except Exception as e:
+            logger.error(f"Error categorizing with LLM: {str(e)}")
+            return None, None
 
     def start_session(
         self, user_id: str, session_title: Optional[str] = None
@@ -78,7 +213,12 @@ class AIAgentService:
 
     def process_message(
         self, session_id: str, user_message: str, message_type: str = "text"
-    ) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    ) -> Tuple[
+        str,
+        Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+    ]:
         """
         Process a user message using LangGraph AI agent and generate a response
 
@@ -113,7 +253,7 @@ class AIAgentService:
                 user_message=user_message,
                 user_id=session.user_id,
                 session_id=session_id,
-                message_type=message_type
+                message_type=message_type,
             )
 
             # Save AI response
@@ -127,7 +267,7 @@ class AIAgentService:
                 result["response"],
                 result.get("extracted_expense"),
                 result.get("budget_warning"),
-                result.get("financial_advice")
+                result.get("financial_advice"),
             )
 
         except Exception as e:
@@ -373,28 +513,28 @@ class AIAgentService:
             if self.langgraph_agent:
                 from langchain_core.messages import HumanMessage
                 from langchain_google_genai import ChatGoogleGenerativeAI
-                
+
                 # Initialize a temporary model for this specific task
                 temp_model = ChatGoogleGenerativeAI(
-                    model="gemini-2.5-flash",
-                    temperature=0.1
+                    model="gemini-2.5-flash", temperature=0.1
                 )
-                
+
                 response = temp_model.invoke([HumanMessage(content=correction_prompt)])
-                
+
                 # Parse the response
-                import json
                 import re
-                
+
                 response_text = response.content.strip()
-                
+
                 # Clean up markdown if present
                 if "```json" in response_text:
                     response_text = (
                         response_text.split("```json")[1].split("```")[0].strip()
                     )
                 elif "```" in response_text:
-                    response_text = response_text.split("```")[1].split("```")[0].strip()
+                    response_text = (
+                        response_text.split("```")[1].split("```")[0].strip()
+                    )
 
                 corrections = json.loads(response_text)
 
@@ -460,3 +600,22 @@ class AIAgentService:
 
         logger.info(f"Chat session closed: {session_id}")
         return session
+
+    def _save_message(self, session_id: str, role: str, content: str) -> None:
+        """
+        Save a message to chat history
+
+        Args:
+            session_id: Chat session ID
+            role: Message role (user/assistant)
+            content: Message content
+        """
+        try:
+            if not self.db_session:
+                return
+
+            message = ChatMessage(session_id=session_id, role=role, content=content)
+            self.db_session.add(message)
+            self.db_session.commit()
+        except Exception as e:
+            logger.error(f"Error saving message: {str(e)}")

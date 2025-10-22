@@ -8,6 +8,8 @@ from pydantic import BaseModel, EmailStr
 from src.core.database import get_db
 from src.core.security import create_access_token, hash_password, verify_password
 from src.models.user import User
+from src.services.category_service import CategoryService
+from src.services.categorization_service import CategorizationService
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -61,6 +63,25 @@ async def register_user(request: UserRegisterRequest, db: Session = Depends(get_
     db.commit()
     db.refresh(user)
 
+    # Initialize Vietnamese categories and rules for the new user
+    try:
+        category_service = CategoryService(db)
+        categorization_service = CategorizationService()
+
+        # Create user's copy of Vietnamese categories
+        category_service.initialize_user_categories(str(user.id))
+
+        # Create categorization rules for automatic categorization
+        categorization_service.initialize_vietnamese_categorization_rules(
+            str(user.id), db_session=db
+        )
+    except Exception as e:
+        # Log but don't fail registration if category initialization fails
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to initialize categories for user {user.id}: {str(e)}")
+
     return UserRegisterResponse(
         id=str(user.id),
         email=user.email,
@@ -75,6 +96,7 @@ async def login(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Session = Depends(get_db),
 ):
+    """Login with email and password"""
     # Find user by email (username in the form data)
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(
@@ -92,3 +114,75 @@ async def login(
     )
 
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/init-vietnamese-data")
+async def init_vietnamese_data_for_all(
+    db: Session = Depends(get_db),
+):
+    """
+    Admin endpoint to initialize Vietnamese categories and rules for all users
+    This should be called once after adding system categories
+    """
+    try:
+        category_service = CategoryService(db)
+        categorization_service = CategorizationService()
+
+        # Get all users except system user
+        users = db.query(User).filter(User.email != "system@moniagent.local").all()
+
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"Initializing Vietnamese data for {len(users)} users")
+
+        initialized_count = 0
+        for user in users:
+            try:
+                user_id = str(user.id)
+
+                # Check if user already has categories
+                from src.models.category import Category
+
+                existing_cats = (
+                    db.query(Category).filter(Category.user_id == user_id).count()
+                )
+
+                if existing_cats == 0:
+                    logger.info(f"Initializing categories for user {user.email}")
+                    categories = category_service.initialize_user_categories(user_id)
+                    logger.info(
+                        f"Created {len(categories)} categories for {user.email}"
+                    )
+                else:
+                    logger.info(
+                        f"User {user.email} already has {existing_cats} categories"
+                    )
+
+                # Create categorization rules
+                logger.info(f"Initializing categorization rules for user {user.email}")
+                rules = (
+                    categorization_service.initialize_vietnamese_categorization_rules(
+                        user_id, db_session=db
+                    )
+                )
+                logger.info(f"Created {len(rules)} rules for {user.email}")
+                initialized_count += 1
+
+            except Exception as e:
+                logger.error(f"Error initializing data for user {user.email}: {str(e)}")
+                db.rollback()
+                continue
+
+        return {
+            "status": "success",
+            "message": f"Initialized Vietnamese data for {initialized_count} users",
+            "users_initialized": initialized_count,
+        }
+
+    except Exception as e:
+        logger.error(f"Error initializing Vietnamese data: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initialize data: {str(e)}",
+        )

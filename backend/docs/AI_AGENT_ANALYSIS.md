@@ -9,19 +9,21 @@
 - **AIAgentService**  
   - Session lifecycle (`start_session`, `close_session`, `get_session_history`).  
   - Message orchestration: saves the user message, invokes LangGraph, persists the AI reply, and assembles the response payload.  
+  - **LLM Categorization** (`categorize_expense_with_llm`): Sends merchant name, amount, and description to Gemini 2.5 Flash with all user's Vietnamese categories listed in the prompt. Returns category_id and confidence_score.
   - Correction support: `handle_correction_request` prompts Gemini to translate free-form corrections into a JSON payload before applying them through `ExpenseProcessingService`.
 - **LangGraphAIAgent**  
   - Implements a `StateGraph` with `extract_expense`, `process_confirmation`, `generate_advice`, and `llm_call` nodes.  
   - Binds schema-aware tools to the Gemini model so the LLM can hand control to deterministic functions when it recognises structured intents.
 - **ExpenseProcessingService**  
-  - Heuristic extraction from plain text (`extract_expense_from_text`) and OCR outputs.  
+  - Heuristic extraction from plain text (`extract_expense_from_text`) and OCR outputs with **LLM-based categorization** support.  
   - Persists expenses, applies corrections, and records `CategorizationFeedback` when user adjustments occur.
+  - When category_id is not provided, automatically calls `categorize_expense_with_llm()` for intelligent categorization.
 - **BudgetManagementService / FinancialAdviceService**  
   - Budget checks and summarisation invoked post-confirmation to generate warnings.  
   - Spending analysis plus optional Gemini-backed financial advice.
 - **Chat Schemas**  
   - `ChatMessageResponse` exposes the assistant reply, extracted expense metadata, optional budget warning message, and advice text.  
-  - `ExtractedExpenseInfo` captures merchant, amount, date, confidence, and a suggested category.
+  - `ExtractedExpenseInfo` captures merchant, amount, date, confidence, **suggested_category_id, suggested_category_name**, and **categorization_confidence**.
 
 ## Conversation Lifecycle
 1. **Session Start**  
@@ -30,7 +32,8 @@
 2. **Message Handling** (`POST /v1/chat/{session}/message`)  
    - Persist the user input as `ChatMessage(role="user")`.  
    - Run `LangGraphAIAgent` with the message, user identity, and session context.  
-   - Persist the assistant reply; return any extracted expense, warning, or advice derived by the graph.
+   - **LLM Categorization**: Automatically categorize extracted expenses using Vietnamese categories.
+   - Persist the assistant reply; return any extracted expense (with categorization), warning, or advice derived by the graph.
 3. **Confirmation / Correction**  
    - `handle_correction_request` uses Gemini to parse corrections into JSON.  
    - Confirmed corrections update the stored expense and store optional learning artefacts.  
@@ -39,18 +42,39 @@
    - History endpoint marshals ORM objects into DTOs.  
    - Closing a session sets status to `completed` without deleting chat history.
 
+## LLM Categorization Prompt
+When categorizing an expense, the system constructs a detailed prompt that includes:
+- User's complete category list (Vietnamese names, emojis, descriptions)
+- Merchant name and amount from extracted expense
+- Description or transaction notes
+- Instructions to return JSON with category_id, confidence_score
+
+Example categorization flow:
+```
+Merchant: "Starbucks"
+Amount: 8.75
+Categories available: [
+  {id: "cat-001", name: "Ăn uống", emoji: "🍜", desc: "..."},
+  {id: "cat-002", name: "Đi lại", emoji: "🚗", desc: "..."},
+  ...
+]
+→ Gemini Response: {"category_id": "cat-001", "category_name": "Ăn uống", "confidence_score": 0.95}
+```
+
 ## LangGraph Workflow
 ```mermaid
 flowchart TD
     A[User message] --> B[extract_expense]
-    B -->|Valid expense| C[process_confirmation]
+    B -->|Valid expense| C[categorize_with_llm]
+    C --> C1[process_confirmation]
     B -->|No structured data| D[llm_call]
-    C -->|Budget warning| E[generate_advice]
-    C -->|No warning| D
+    C1 -->|Budget warning| E[generate_advice]
+    C1 -->|No warning| D
     E --> D
     D --> F[Assistant reply]
 ```
 - `extract_expense`: calls `ExpenseProcessingService` heuristics for text or image payloads.  
+- `categorize_with_llm`: **NEW** - calls `AIAgentService.categorize_expense_with_llm()` to intelligently categorize against Vietnamese categories.
 - `_route_after_extraction`: routes to confirmation only when the extracted data passes validation.  
 - `process_confirmation`: saves expenses and calls the budget service.  
 - `generate_advice`: asks `FinancialAdviceService` for contextual guidance when a warning is raised.  

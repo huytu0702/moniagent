@@ -8,6 +8,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 from src.models.category import Category
 from src.models.expense_categorization_rule import ExpenseCategorizationRule
+from src.models.user import User
 
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,115 @@ class CategoryServiceError(Exception):
 
 class CategoryService:
     """
-    Service for handling category management operations
+    Service for handling category operations
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, db_session: Session = None):
+        self.db_session = db_session
+
+    def initialize_user_categories(self, user_id: str) -> List[Category]:
+        """
+        Initialize user with Vietnamese system categories
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            List of created categories
+        """
+        try:
+            if not self.db_session:
+                raise ValueError("Database session not available")
+
+            logger.info(f"Initializing categories for user {user_id}")
+
+            # Get all system categories
+            system_user = (
+                self.db_session.query(User)
+                .filter(User.email == "system@moniagent.local")
+                .first()
+            )
+
+            if not system_user:
+                logger.warning(
+                    "System user not found, skipping category initialization"
+                )
+                return []
+
+            system_categories = (
+                self.db_session.query(Category)
+                .filter(
+                    Category.user_id == system_user.id,
+                    Category.is_system_category == True,
+                )
+                .order_by(Category.display_order)
+                .all()
+            )
+
+            created_categories = []
+            for sys_cat in system_categories:
+                # Check if user already has this category
+                existing = (
+                    self.db_session.query(Category)
+                    .filter(Category.user_id == user_id, Category.name == sys_cat.name)
+                    .first()
+                )
+
+                if not existing:
+                    new_category = Category(
+                        user_id=user_id,
+                        name=sys_cat.name,
+                        description=sys_cat.description,
+                        icon=sys_cat.icon,
+                        color=sys_cat.color,
+                        is_system_category=False,  # Mark as user's copy
+                        display_order=sys_cat.display_order,
+                    )
+                    self.db_session.add(new_category)
+                    created_categories.append(new_category)
+                    logger.info(f"Created category {sys_cat.name} for user {user_id}")
+                else:
+                    created_categories.append(existing)
+
+            self.db_session.commit()
+            logger.info(
+                f"Initialized {len(created_categories)} categories for user {user_id}"
+            )
+
+            return created_categories
+
+        except Exception as e:
+            logger.error(f"Error initializing user categories: {str(e)}")
+            if self.db_session:
+                self.db_session.rollback()
+            raise
+
+    def get_categories_by_user(self, user_id: str) -> List[Category]:
+        """
+        Get all categories for a user
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            List of categories
+        """
+        try:
+            if not self.db_session:
+                raise ValueError("Database session not available")
+
+            categories = (
+                self.db_session.query(Category)
+                .filter(Category.user_id == user_id)
+                .order_by(Category.display_order)
+                .all()
+            )
+
+            return categories
+
+        except Exception as e:
+            logger.error(f"Error getting user categories: {str(e)}")
+            raise
 
     def create_category(
         self,

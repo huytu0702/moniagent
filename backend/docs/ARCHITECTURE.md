@@ -53,11 +53,12 @@ backend/
 ### Services (`src/services`)
 - `invoice_service.py` coordinates OCR ingestion, persistence, and querying of invoices.
 - `ocr_service.py` streams invoice images to Gemini 2.5 Flash, normalises the JSON payload, and handles markdown wrapped results.
-- `expense_processing_service.py` extracts expenses from text or invoices, persists confirmed records, applies corrections, and triggers follow-up work (budget checks, advice).
+- `expense_processing_service.py` extracts expenses from text or invoices, persists confirmed records, applies corrections, and triggers follow-up work (budget checks, advice). Now includes LLM-based categorization via `categorize_expense_with_llm()`.
 - `budget_management_service.py` and `expense_aggregation_service.py` compute budget usage, alerts, and reporting summaries. They operate fully when a SQLAlchemy session is supplied and fall back to deterministic stub data otherwise.
 - `financial_advice_service.py` analyses recent spend, derives a spending pattern, and (when available) calls Gemini for tailored advice with safe fallbacks.
-- `categorization_service.py` and `category_service.py` manage user-defined categories, matching rules, and feedback learning loops.
-- `ai_agent_service.py` glues chat sessions, LangGraph state execution, corrections, and persistence.
+- `categorization_service.py` manages user-defined categories, matching rules, keyword-based fallback rules, and feedback learning loops. Also provides `initialize_vietnamese_categorization_rules()` to set up default keyword patterns for new users.
+- `category_service.py` handles CRUD operations on categories and provides `initialize_user_categories()` to auto-populate Vietnamese system categories for new users.
+- `ai_agent_service.py` glues chat sessions, LangGraph state execution, LLM categorization, corrections, and persistence. Includes `categorize_expense_with_llm()` for intelligent category assignment.
 
 ### Models (`src/models`)
 - SQLAlchemy declarative models for users, invoices, expenses, budgets, chat sessions/messages, categorisation rules, and feedback.
@@ -83,6 +84,16 @@ backend/
 1. `POST /v1/invoices/process` validates MIME type and streams the upload to `InvoiceService.process_invoice_upload`.
 2. `InvoiceService` leverages `OCRService.process_invoice` (Gemini 2.5 Flash) to extract merchant, total, and date values, then creates or updates an `Invoice` record.
 3. The API responds with `InvoiceResponse`; downstream flows (manual confirmation or chat) can transform the invoice into an expense entry.
+
+### Vietnamese Categories & LLM Categorization
+1. **System Categories**: 10 pre-defined Vietnamese categories (Ăn uống, Đi lại, Nhà ở, etc.) are created at migration time as system-wide templates.
+2. **User Initialization**: When a new user registers via `POST /v1/auth/register`, the `CategoryService.initialize_user_categories()` is automatically called, copying all system categories to the new user's profile.
+3. **LLM-Based Auto-Categorization**: When an expense is extracted (via text input or invoice OCR), the system:
+   - Calls `AIAgentService.categorize_expense_with_llm()` with merchant name, amount, and description.
+   - Sends a detailed prompt to Gemini 2.5 Flash listing all user categories with Vietnamese names, emojis, and descriptions.
+   - Receives a JSON response with `category_id`, `category_name`, and `confidence_score` (0.0-1.0).
+   - Falls back to keyword-based rules if LLM categorization fails.
+4. **Feedback Loop**: User corrections (via `handle_correction_request`) update the categorization and store feedback for future refinement.
 
 ### Conversational Expense Tracking
 1. `POST /v1/chat/start` creates a `ChatSession` and returns an onboarding prompt from `AIAgentService.get_initial_message`.
