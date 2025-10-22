@@ -1,155 +1,75 @@
-# Phân Tích Luồng Hoạt Động của AI Agent trong Moniagent
+# AI Agent Operating Guide
 
-## Tổng Quan
+## Overview
+- Conversational expense tracking is delivered by `AIAgentService`, `LangGraphAIAgent`, and a set of domain services (`ExpenseProcessingService`, `BudgetManagementService`, `FinancialAdviceService`).
+- The agent accepts text or image messages, extracts structured expenses, checks budgets, and returns actionable replies. Gemini 2.5 Flash provides both OCR and lightweight reasoning.
+- All chat traffic is stored in `ChatSession` and `ChatMessage` tables; confirmed expenses flow into the standard expense pipeline and inherit budget/advice automation.
 
-Moniagent là một ứng dụng quản lý chi tiêu cá nhân sử dụng AI để tự động hóa việc theo dõi và phân loại chi tiêu. AI Agent trong hệ thống sử dụng LangGraph framework kết hợp với Google Gemini 2.5 để xử lý các cuộc hội thoại về chi tiêu, trích xuất thông tin từ hóa đơn, và cung cấp lời khuyên tài chính.
+## Component Responsibilities
+- **AIAgentService**  
+  - Session lifecycle (`start_session`, `close_session`, `get_session_history`).  
+  - Message orchestration: saves the user message, invokes LangGraph, persists the AI reply, and assembles the response payload.  
+  - Correction support: `handle_correction_request` prompts Gemini to translate free-form corrections into a JSON payload before applying them through `ExpenseProcessingService`.
+- **LangGraphAIAgent**  
+  - Implements a `StateGraph` with `extract_expense`, `process_confirmation`, `generate_advice`, and `llm_call` nodes.  
+  - Binds schema-aware tools to the Gemini model so the LLM can hand control to deterministic functions when it recognises structured intents.
+- **ExpenseProcessingService**  
+  - Heuristic extraction from plain text (`extract_expense_from_text`) and OCR outputs.  
+  - Persists expenses, applies corrections, and records `CategorizationFeedback` when user adjustments occur.
+- **BudgetManagementService / FinancialAdviceService**  
+  - Budget checks and summarisation invoked post-confirmation to generate warnings.  
+  - Spending analysis plus optional Gemini-backed financial advice.
+- **Chat Schemas**  
+  - `ChatMessageResponse` exposes the assistant reply, extracted expense metadata, optional budget warning message, and advice text.  
+  - `ExtractedExpenseInfo` captures merchant, amount, date, confidence, and a suggested category.
 
-## Kiến Trúc Chính
+## Conversation Lifecycle
+1. **Session Start**  
+   - `POST /v1/chat/start` creates `ChatSession` and returns a fixed onboarding prompt.  
+   - No LangGraph call occurs at this point.
+2. **Message Handling** (`POST /v1/chat/{session}/message`)  
+   - Persist the user input as `ChatMessage(role="user")`.  
+   - Run `LangGraphAIAgent` with the message, user identity, and session context.  
+   - Persist the assistant reply; return any extracted expense, warning, or advice derived by the graph.
+3. **Confirmation / Correction**  
+   - `handle_correction_request` uses Gemini to parse corrections into JSON.  
+   - Confirmed corrections update the stored expense and store optional learning artefacts.  
+   - Endpoint `POST /v1/chat/{session}/confirm-expense` currently only returns placeholders; persistence wiring is planned.
+4. **Session History & Closure**  
+   - History endpoint marshals ORM objects into DTOs.  
+   - Closing a session sets status to `completed` without deleting chat history.
 
-- **Backend**: FastAPI microservice với Python 3.10+
-- **Database**: Supabase (PostgreSQL) cho dữ liệu người dùng và chi tiêu
-- **AI Stack**:
-  - LangGraph: Framework để xây dựng agent workflows
-  - Google Gemini 2.5: OCR và xử lý ngôn ngữ tự nhiên
-  - LangChain: Tích hợp các components AI
-
-## Luồng Hoạt Động Chính
-
+## LangGraph Workflow
 ```mermaid
 flowchart TD
-    A["User bắt đầu chat session"] --> B["/chat/start API"]
-    B --> C["AIAgentService.start_session"]
-    C --> D["Trả về initial message"]
-
-    E["User gửi message"] --> F["/chat/{session_id}/message API"]
-    F --> G["AIAgentService.process_message"]
-
-    G --> H["Message type?"]
-    H -->|"Text"| I["extract_expense_from_text"]
-    H -->|"Image"| J["OCRService.process_invoice"]
-
-    I --> K["CategorizationService.suggest_category"]
-    J --> K
-
-    K --> L["LangGraphAIAgent.run"]
-
-    L --> M["extract_expense node"]
-    M --> N["Valid expense data?"]
-
-    N -->|"Yes"| O["process_confirmation node"]
-    N -->|"No"| P["llm_call node"]
-
-    O --> Q["Save expense & check budget"]
-    Q --> R["Has budget warning?"]
-
-    R -->|"Yes"| S["generate_advice node"]
-    R -->|"No"| P
-
-    S --> T["Generate financial advice"]
-    T --> P
-
-    P --> U["LLM response với Gemini"]
-    U --> V["Lưu message vào history"]
-
-    V --> W["Trả về response cho user"]
-
-    X["User confirm/correct expense"] --> Y["process_correction"]
-    Y --> Z["Update expense & generate advice"]
+    A[User message] --> B[extract_expense]
+    B -->|Valid expense| C[process_confirmation]
+    B -->|No structured data| D[llm_call]
+    C -->|Budget warning| E[generate_advice]
+    C -->|No warning| D
+    E --> D
+    D --> F[Assistant reply]
 ```
+- `extract_expense`: calls `ExpenseProcessingService` heuristics for text or image payloads.  
+- `_route_after_extraction`: routes to confirmation only when the extracted data passes validation.  
+- `process_confirmation`: saves expenses and calls the budget service.  
+- `generate_advice`: asks `FinancialAdviceService` for contextual guidance when a warning is raised.  
+- `llm_call`: default Gemini response path when no structured intent is recognised; also finalises the assistant reply.
 
-## Chi Tiết Các Components
+## Data Persistence
+- **Expenses**: `ExpenseProcessingService.save_expense` commits new entries with `confirmed_by_user=False` until the user confirms. Manual creation via `/v1/expenses` skips the AI flow and stores confirmed entries directly.  
+- **Feedback**: Corrections trigger `_store_correction_learning`, producing `CategorizationFeedback` rows used by rule learning.  
+- **Chat**: Every user and assistant turn is stored; this enables future analytics and auditing.
 
-### 1. AIAgentService
-- **Chức năng**: Quản lý các cuộc hội thoại AI-powered
-- **Phương thức chính**:
-  - `start_session()`: Khởi tạo session mới
-  - `process_message()`: Xử lý message và generate response
-  - `process_correction()`: Xử lý sửa đổi chi tiêu
-  - `get_session_history()`: Lấy lịch sử hội thoại
+## Error Handling & Safeguards
+- Missing sessions raise `ValidationError`, returning a 422 with `VALIDATION_ERROR`.  
+- Gemini parsing failures fall back to generic clarifying prompts instead of returning raw stack traces.  
+- `get_current_user` allows a mock token in development only (`mock-token-for-development`), simplifying local agent testing.
 
-### 2. LangGraphAIAgent
-- **Framework**: Sử dụng StateGraph để xây dựng workflow
-- **Nodes chính**:
-  - `extract_expense`: Trích xuất thông tin chi tiêu từ message
-  - `process_confirmation`: Xác nhận và lưu chi tiêu
-  - `generate_advice`: Tạo lời khuyên tài chính
-  - `llm_call`: Gọi LLM để generate response
-
-### 3. OCRService
-- **Công nghệ**: Google Gemini 2.5 Vision
-- **Chức năng**: Trích xuất thông tin từ hình ảnh hóa đơn
-- **Output**: store_name, date, total_amount
-
-### 4. CategorizationService
-- **Phương pháp**: Rule-based matching với confidence scores
-- **Loại rules**: exact_match, keyword, regex
-- **Learning**: Ghi nhận feedback để cải thiện categorization
-
-### 5. ExpenseProcessingService
-- **Chức năng**: Xử lý logic chi tiêu
-- **Tích hợp**: Budget checking, financial advice generation
-
-## Điểm Mạnh Hiện Tại
-
-1. **Tích hợp tốt**: Kết hợp OCR, NLP, và rule-based systems
-2. **Modular architecture**: Dễ mở rộng và maintain
-3. **Real-time processing**: Xử lý ngay lập tức
-4. **Learning capability**: Học từ user corrections
-
-## Đề Xuất Hướng Phát Triển AI Agent
-
-### 1. Cải Thiện Conversation Flow
-- **Multi-turn memory**: Lưu trữ context dài hạn cho conversations phức tạp
-- **Intent recognition**: Phân biệt giữa query thông tin vs. báo cáo chi tiêu
-- **Proactive suggestions**: Tự động đề xuất categories hoặc detect patterns
-
-### 2. Nâng Cao AI Capabilities
-- **Advanced NLP**: Sử dụng RAG (Retrieval-Augmented Generation) cho personalized responses
-- **Sentiment analysis**: Phân tích cảm xúc trong financial decisions
-- **Predictive analytics**: Dự đoán spending patterns và alert sớm
-
-### 3. Tích Hợp External Services
-- **Bank APIs**: Tự động import transactions từ ngân hàng
-- **Investment APIs**: Đề xuất đầu tư dựa trên spending habits
-- **Market data**: Cung cấp insights về inflation và market trends
-
-### 4. Enhanced Personalization
-- **User profiling**: Xây dựng personality profiles cho advice phù hợp
-- **Goal-based planning**: Hỗ trợ financial goals (saving for vacation, debt payoff)
-- **Peer comparison**: Anonymous benchmarking với similar users
-
-### 5. Technical Improvements
-- **Hybrid AI**: Kết hợp multiple LLMs cho different tasks
-- **Edge computing**: Process sensitive data locally
-- **Real-time collaboration**: Multi-user expense tracking
-
-### 6. Advanced Features
-- **Voice interface**: Integration với voice assistants
-- **AR receipt scanning**: Augmented reality cho scanning receipts
-- **Blockchain integration**: Immutable expense records
-
-### 7. Business Intelligence
-- **Analytics dashboard**: Advanced reporting với AI insights
-- **Anomaly detection**: Detect fraudulent transactions
-- **Tax optimization**: Automated tax deduction suggestions
-
-## Roadmap Phát Triển
-
-### Phase 1 (3 tháng)
-- Implement multi-turn conversations
-- Add basic predictive analytics
-- Improve OCR accuracy với custom training
-
-### Phase 2 (6 tháng)
-- Integrate bank APIs
-- Add investment suggestions
-- Launch mobile app với voice features
-
-### Phase 3 (12 tháng)
-- Full AI financial advisor
-- Multi-currency support
-- Enterprise features cho small businesses
-
-## Kết Luận
-
-AI Agent hiện tại của Moniagent đã có foundation vững chắc với architecture modular và tích hợp tốt các AI technologies. Các đề xuất phát triển tập trung vào việc nâng cao personalization, mở rộng capabilities, và tạo value lớn hơn cho users thông qua advanced AI features.
+## Limitations & Improvement Ideas
+1. **Correction endpoint**: `/chat/{session}/confirm-expense` currently returns stub data and should reuse expense persistence once available.  
+2. **Multi-turn memory**: LangGraph currently processes the latest message only; feeding previous turns into `AgentState.messages` would improve continuity.  
+3. **Tooling feedback**: Capture node decisions (which tool fired, why) to aid agent debugging.  
+4. **Async workloads**: OCR and long-running advice generation execute inline; offloading to a background queue would free the request thread.  
+5. **Safety rails**: Add rate limiting and content filtering before passing user text to the LLM.  
+6. **Evaluation harness**: Record interactions plus user confirmations to measure extraction accuracy over time.

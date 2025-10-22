@@ -1,296 +1,338 @@
 # API Endpoints Reference
 
-## Base URL
-```
-http://localhost:8000/v1
-https://api.moniagent.com/v1  (production)
-```
+## Base URLs
+- Local: `http://localhost:8000/v1`
+- Production: `https://api.moniagent.com/v1`
 
-## Authentication
-All endpoints except `/auth/*` require a JWT token in the Authorization header:
-```
-Authorization: Bearer <access-token>
-```
+All routes under `/v1` require `Authorization: Bearer <token>` unless noted. In development, the token `mock-token-for-development` resolves to a stub user.
 
----
-
-## Authentication Endpoints
-
-### Register User
-```http
-POST /auth/register
-Content-Type: application/json
-
+## Error Format
+```json
 {
-  "email": "user@example.com",
-  "password": "securePassword123",
-  "first_name": "John",
-  "last_name": "Doe"
+  "detail": "Human readable message",
+  "error_code": "OPTIONAL_CODE"
 }
 ```
 
-**Response** (201 Created):
+## Authentication
+
+### Register
+```http
+POST /auth/register
+Content-Type: application/json
+```
+```json
+{
+  "email": "user@example.com",
+  "password": "SecurePass123!",
+  "first_name": "Jamie",
+  "last_name": "Lee"
+}
+```
+**Response 200**
 ```json
 {
   "id": "uuid",
   "email": "user@example.com",
-  "first_name": "John",
-  "last_name": "Doe",
-  "created_at": "2025-01-01T00:00:00Z"
+  "first_name": "Jamie",
+  "last_name": "Lee",
+  "created_at": "2025-10-16T08:30:00Z"
 }
 ```
-
-**Errors**:
-- `409 Conflict`: Email already registered
-- `422 Unprocessable Entity`: Validation error
 
 ### Login
 ```http
 POST /auth/login
 Content-Type: application/x-www-form-urlencoded
 
-username=user@example.com&password=securePassword123
+username=user@example.com&password=SecurePass123!
 ```
-
-**Response** (200 OK):
+**Response 200**
 ```json
 {
-  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+  "access_token": "jwt-token",
   "token_type": "bearer"
 }
 ```
 
-**Errors**:
-- `401 Unauthorized`: Invalid credentials
-- `404 Not Found`: User not found
+## Invoice Routes
 
----
-
-## Invoice Endpoints
-
-### Upload & Process Invoice
+### Process Invoice (OCR)
 ```http
 POST /invoices/process
 Authorization: Bearer <token>
 Content-Type: multipart/form-data
-
-file: <image-file>
 ```
-
-**Supported Formats**: JPG, PNG
-**Max Size**: Not specified
-
-**Response** (200 OK):
+Form field `file` must be a JPEG or PNG.  
+**Response 200**
 ```json
 {
-  "invoice_id": "invoice-uuid",
+  "invoice_id": "inv-123",
   "store_name": "Whole Foods Market",
-  "date": "2025-01-15",
+  "date": "2025-10-15",
   "total_amount": 45.99,
   "status": "processed"
 }
 ```
+Errors: 400 invalid file, 500 OCR failure.
 
-**Errors**:
-- `400 Bad Request`: Invalid file format
-- `401 Unauthorized`: Missing/invalid token
-- `413 Payload Too Large`: File exceeds size limit
-- `500 Internal Server Error`: OCR processing failed
-
-### Get Invoice Details
-```http
-GET /invoices/{invoice_id}
-Authorization: Bearer <token>
-```
-
-**Response** (200 OK):
-```json
-{
-  "invoice_id": "invoice-uuid",
-  "store_name": "Whole Foods Market",
-  "date": "2025-01-15",
-  "total_amount": 45.99,
-  "status": "confirmed"
-}
-```
-
-### List User Invoices
+### List Invoices
 ```http
 GET /invoices
 Authorization: Bearer <token>
 ```
-
-**Response** (200 OK):
+**Response 200**
 ```json
 {
   "invoices": [
     {
-      "invoice_id": "invoice-uuid",
+      "invoice_id": "inv-123",
       "store_name": "Whole Foods Market",
-      "date": "2025-01-15",
+      "date": "2025-10-15",
       "total_amount": 45.99,
-      "status": "confirmed"
+      "status": "processed"
     }
   ]
 }
 ```
 
----
+### Get Invoice
+```http
+GET /invoices/{invoice_id}
+Authorization: Bearer <token>
+```
+**Response 200** - same schema as above. Returns 403 if the invoice belongs to another user.
 
-## Expense Endpoints
+## Expense Routes
 
 ### Create Expense
 ```http
 POST /expenses
 Authorization: Bearer <token>
 Content-Type: application/json
-
-{
-  "amount": 25.50,
-  "date": "2025-01-15",
-  "category_id": "category-uuid",
-  "description": "Lunch at restaurant",
-  "invoice_id": "invoice-uuid"  (optional)
-}
 ```
-
-**Response** (201 Created):
 ```json
 {
-  "id": "expense-uuid",
-  "user_id": "user-uuid",
-  "amount": 25.50,
-  "date": "2025-01-15",
-  "category_id": "category-uuid",
-  "category_name": "Eating Out",
-  "description": "Lunch at restaurant",
-  "status": "confirmed",
-  "created_at": "2025-01-15T12:00:00Z"
+  "merchant_name": "Starbucks",
+  "amount": 8.75,
+  "date": "2025-10-16",
+  "category_id": "cat-coffee",
+  "description": "Morning latte"
 }
 ```
+**Response 200**
+```json
+{
+  "id": "exp-123",
+  "user_id": "user-456",
+  "merchant_name": "Starbucks",
+  "amount": 8.75,
+  "date": "2025-10-16",
+  "category_id": "cat-coffee",
+  "description": "Morning latte",
+  "confirmed_by_user": true,
+  "source_type": "manual",
+  "created_at": "2025-10-16T08:42:00Z",
+  "updated_at": "2025-10-16T08:42:00Z"
+}
+```
+Validation errors return 422; other failures return 400.
 
 ### List Expenses
 ```http
-GET /expenses
+GET /expenses?category_id=<optional>
 Authorization: Bearer <token>
-
-Query Parameters:
-  ?category_id=uuid
-  ?start_date=2025-01-01&end_date=2025-01-31
-  ?skip=0&limit=50
 ```
-
-**Response** (200 OK):
+**Response 200**
 ```json
 {
-  "items": [
-    { "id": "...", "amount": 25.50, "..." }
-  ],
-  "total": 156,
-  "skip": 0,
-  "limit": 50
+  "expenses": [
+    {
+      "id": "exp-123",
+      "user_id": "user-456",
+      "merchant_name": "Starbucks",
+      "amount": 8.75,
+      "date": "2025-10-16",
+      "category_id": "cat-coffee",
+      "description": "Morning latte",
+      "confirmed_by_user": true,
+      "source_type": "manual",
+      "created_at": "2025-10-16T08:42:00Z",
+      "updated_at": "2025-10-16T08:42:00Z"
+    }
+  ]
 }
 ```
 
-### Update Expense
+### Get Expense
+```http
+GET /expenses/{expense_id}
+Authorization: Bearer <token>
+```
+Returns the same schema as `ExpenseResponse`. 404 when not found, 403 if the record belongs to a different user.
+
+### Update Expense / Apply Corrections
 ```http
 PUT /expenses/{expense_id}
 Authorization: Bearer <token>
 Content-Type: application/json
-
+```
+```json
 {
-  "category_id": "new-category-uuid",
-  "description": "Updated description"
+  "merchant_name": "Blue Bottle Coffee",
+  "amount": 9.25,
+  "date": "2025-10-17",
+  "category_id": "cat-coffee"
 }
 ```
+**Response 200**
+```json
+{
+  "id": "exp-123",
+  "merchant_name": "Blue Bottle Coffee",
+  "amount": 9.25,
+  "date": "2025-10-17",
+  "category_id": "cat-coffee",
+  "confirmed_by_user": true,
+  "message": "Expense updated successfully",
+  "budget_warning": {
+    "category_id": "cat-coffee",
+    "category_name": "Coffee",
+    "limit": 120.0,
+    "spent": 90.0,
+    "total_with_new_expense": 99.25,
+    "remaining": 20.75,
+    "percentage_used": 0.83,
+    "alert_threshold": 0.8,
+    "warning": true,
+    "alert_level": "medium",
+    "message": "You are approaching your budget limit for Coffee."
+  }
+}
+```
+Missing fields in the request are ignored; an empty payload raises `400`.
 
 ### Delete Expense
 ```http
 DELETE /expenses/{expense_id}
 Authorization: Bearer <token>
 ```
+**Response 200**
+```json
+{
+  "message": "Expense deleted successfully",
+  "expense_id": "exp-123"
+}
+```
 
-**Response** (204 No Content)
-
----
-
-## Category Endpoints
+## Category & Rule Routes
 
 ### List Categories
 ```http
 GET /categories
 Authorization: Bearer <token>
 ```
-
-**Response** (200 OK):
+**Response 200**
 ```json
 {
-  "items": [
+  "categories": [
     {
-      "id": "uuid",
-      "name": "Eating Out",
-      "description": "Restaurants, cafes",
-      "icon": "🍽️"
-    },
-    {
-      "id": "uuid",
-      "name": "Transportation",
-      "description": "Gas, public transit",
-      "icon": "🚗"
+      "id": "cat-coffee",
+      "user_id": "user-456",
+      "name": "Coffee",
+      "description": "Cafe spending",
+      "icon": "coffee",
+      "color": "#6f4e37",
+      "is_system_category": false,
+      "display_order": 1,
+      "created_at": "2025-10-01T12:00:00Z",
+      "updated_at": "2025-10-10T09:30:00Z"
     }
   ]
 }
 ```
 
-### Create Custom Category
+### Create Category
 ```http
 POST /categories
 Authorization: Bearer <token>
 Content-Type: application/json
-
+```
+```json
 {
   "name": "Subscriptions",
-  "description": "Monthly subscriptions",
-  "icon": "📅"
+  "description": "Recurring services",
+  "icon": "card",
+  "color": "#4098d7",
+  "display_order": 4
 }
 ```
+**Response 200** - returns the full `CategoryResponse`.
 
-**Response** (201 Created): Category object
+### Get / Update / Delete
+- `GET /categories/{category_id}` → `CategoryResponse`
+- `PUT /categories/{category_id}` (partial update) → `CategoryResponse`
+- `DELETE /categories/{category_id}` → `{"message": "Category deleted"}` (400/404 for failures)
 
----
+### Manage Categorisation Rules
+- `POST /categories/rules`  
+  ```json
+  {
+    "category_id": "cat-coffee",
+    "store_name_pattern": "Starbucks",
+    "rule_type": "keyword",
+    "confidence_threshold": 0.8
+  }
+  ```
+  Returns `CategorizationRuleResponse`.
+- `GET /categories/rules/{category_id}` → `{"rules": [...]}`  
+  Currently returns an empty list unless custom rules exist.
 
-## Budget Endpoints
+### Suggestions and Confirmations
+- `POST /categories/suggest`  
+  ```json
+  { "expense_id": "exp-123" }
+  ```  
+  Returns `CategorizationSuggestionResponse` with `suggested_category_id`, `suggested_category_name`, and `confidence_score`.  
+- `POST /categories/confirm`  
+  ```json
+  {
+    "expense_id": "exp-123",
+    "category_id": "cat-coffee"
+  }
+  ```  
+  Returns `CategorizeExpenseResponse`. `category_id` is mandatory.
+
+## Budgets & Spending
 
 ### Create Budget
 ```http
 POST /budgets
 Authorization: Bearer <token>
 Content-Type: application/json
-
-{
-  "category_id": "category-uuid",
-  "amount": 500.00,
-  "period": "monthly",
-  "start_date": "2025-01-01"
-}
 ```
-
-**Period Values**: `daily`, `weekly`, `monthly`, `yearly`
-
-**Response** (201 Created):
 ```json
 {
-  "id": "budget-uuid",
-  "user_id": "user-uuid",
-  "category_id": "category-uuid",
-  "amount": 500.00,
+  "category_id": "cat-groceries",
+  "limit_amount": 400,
   "period": "monthly",
-  "spent": 245.50,
-  "remaining": 254.50,
-  "percentage_used": 49.1,
-  "start_date": "2025-01-01",
-  "end_date": "2025-01-31",
-  "created_at": "2025-01-01T00:00:00Z"
+  "alert_threshold": 0.8
+}
+```
+**Response 201**
+```json
+{
+  "id": "budget-123",
+  "user_id": "user-456",
+  "category_id": "cat-groceries",
+  "category_name": "Unknown",
+  "limit_amount": 400.0,
+  "period": "monthly",
+  "spent_amount": 0.0,
+  "remaining_amount": 400.0,
+  "alert_threshold": 0.8,
+  "created_at": "2025-10-16T09:00:00Z",
+  "updated_at": "2025-10-16T09:00:00Z"
 }
 ```
 
@@ -299,225 +341,237 @@ Content-Type: application/json
 GET /budgets
 Authorization: Bearer <token>
 ```
+Returns a JSON array of budget dictionaries. The current implementation returns an empty list until persistence is finalised.
 
-**Response** (200 OK):
-```json
-{
-  "items": [
-    { "id": "...", "category_id": "...", "..." }
-  ],
-  "total": 5
-}
+### Get Budget (placeholder)
+```http
+GET /budgets/{budget_id}
+Authorization: Bearer <token>
 ```
+Returns a mock `BudgetResponse` payload. Use only for UI scaffolding until the backing query is implemented.
 
 ### Update Budget
 ```http
 PUT /budgets/{budget_id}
 Authorization: Bearer <token>
 Content-Type: application/json
-
-{
-  "amount": 600.00
-}
 ```
+Partial updates supported (`limit_amount`, `alert_threshold`, `period`). Response mirrors `BudgetResponse`.
 
 ### Delete Budget
 ```http
 DELETE /budgets/{budget_id}
 Authorization: Bearer <token>
 ```
+Responds with HTTP 204 (no body) on success.
 
----
+### Budget Alerts
+```http
+GET /budgets/alerts
+Authorization: Bearer <token>
+```
+Returns an array of alert dictionaries. Currently emits an empty array until alert generation is implemented.
 
-## AI Agent & Chat Endpoints
+### Budget Status Check
+```http
+GET /budgets/check/{category_id}?amount=<optional>
+Authorization: Bearer <token>
+```
+When a budget exists, the response resembles:
+```json
+{
+  "category_id": "cat-groceries",
+  "category_name": "Groceries",
+  "limit": 400.0,
+  "spent": 320.0,
+  "total_with_new_expense": 350.0,
+  "remaining": 50.0,
+  "percentage_used": 0.875,
+  "alert_threshold": 0.8,
+  "warning": true,
+  "alert_level": "medium",
+  "message": "You are approaching your budget limit for Groceries."
+}
+```
+If no budget exists, it returns:
+```json
+{
+  "category_id": "cat-groceries",
+  "has_budget": false,
+  "message": "No budget set for this category"
+}
+```
+
+### Spending Summary
+```http
+GET /spending/summary?period=daily|weekly|monthly
+Authorization: Bearer <token>
+```
+**Response 200**
+```json
+{
+  "period": "monthly",
+  "total_spending": 1500.0,
+  "by_category": [
+    {
+      "category_id": "cat-1",
+      "category_name": "Eating Out",
+      "amount": 500.0,
+      "percentage": 33.3
+    }
+  ],
+  "by_week": [
+    {
+      "week": "2025-W42",
+      "amount": 300.0,
+      "percentage": 20.0
+    }
+  ]
+}
+```
+When no database session is provided, canned demo values are returned.
+
+## AI Advice & Chat
+
+### Financial Advice
+```http
+GET /financial-advice?period=daily|weekly|monthly
+Authorization: Bearer <token>
+```
+**Response 200**
+```json
+{
+  "advice": "You are spending 33% on dining out. Consider cooking at home more often.",
+  "recommendations": [
+    "Set a weekly dining budget of $75",
+    "Prepare meals in advance to reduce impulse purchases"
+  ],
+  "spending_pattern": "high",
+  "period": "monthly",
+  "top_spending_category": "Eating Out",
+  "top_spending_amount": 500.0
+}
+```
+If the Gemini client is unavailable, a deterministic fallback advice string is returned.
 
 ### Start Chat Session
 ```http
 POST /chat/start
 Authorization: Bearer <token>
 Content-Type: application/json
-
-{
-  "session_title": "Monthly expense tracking"
-}
 ```
-
-**Response** (200 OK):
 ```json
 {
-  "session_id": "session-uuid",
+  "session_title": "October catch-up"
+}
+```
+**Response 200**
+```json
+{
+  "session_id": "sess-123",
   "message": "Chat session started successfully",
-  "initial_message": "Hello! I'm your AI assistant for expense tracking. You can upload an invoice image or describe your expense. What would you like to do?"
+  "initial_message": "Hello! I'm your AI assistant for expense tracking..."
 }
 ```
 
-### Send Chat Message
+### Send Message
 ```http
 POST /chat/{session_id}/message
 Authorization: Bearer <token>
 Content-Type: application/json
-
-{
-  "content": "I spent $25 on coffee at Starbucks today",
-  "message_type": "text"  (or "image" for receipt uploads)
-}
 ```
-
-**Response** (200 OK):
 ```json
 {
-  "message_id": "msg-uuid",
-  "response": "I found an expense: $25.00 at Starbucks. Is this correct?",
+  "content": "I spent $45 at Trader Joe's yesterday",
+  "message_type": "text"
+}
+```
+**Response 200**
+```json
+{
+  "message_id": "msg-789",
+  "response": "I found an expense for $45.00 at Trader Joe's on 2025-10-15. Does that look right?",
   "extracted_expense": {
-    "merchant_name": "Starbucks",
-    "amount": 25.00,
-    "date": "2025-01-16",
-    "confidence": 0.95,
-    "description": "coffee"
+    "merchant_name": "Trader Joe's",
+    "amount": 45.0,
+    "date": "2025-10-15",
+    "confidence": 0.85,
+    "description": "I spent $45 at Trader Joe's yesterday",
+    "suggested_category_id": "cat-groceries",
+    "categorization_confidence": 0.67
   },
   "requires_confirmation": true,
-  "budget_warning": "You've spent $85 of your $100 Eating Out budget this week",
-  "advice": "Consider switching to home coffee to save $200-300 per month"
+  "budget_warning": null,
+  "advice": null
 }
 ```
 
-### Confirm Expense from Chat
+### Confirm Expense (placeholder)
 ```http
 POST /chat/{session_id}/confirm-expense
 Authorization: Bearer <token>
-
-Query Parameters:
-  ?expense_id=expense-uuid
-  &category_id=category-uuid  (optional)
-  &confirmed=true
+Content-Type: application/json
 ```
+Payload mirrors `ExpenseConfirmationRequest` (`confirmed`, optional `corrections`).  
+**Response 200** currently returns
+```json
+{
+  "status": "confirmed",
+  "message": "Expense confirmed and saved",
+  "expense_id": "exp-123"
+}
+```
+This endpoint is a stub and will be replaced with real persistence logic.
 
-### Get Chat Session History
+### Session History
 ```http
 GET /chat/{session_id}/history
 Authorization: Bearer <token>
 ```
-
-**Response** (200 OK):
+**Response 200**
 ```json
 {
   "session": {
-    "id": "session-uuid",
-    "user_id": "user-uuid",
-    "session_title": "Monthly expense tracking",
+    "id": "sess-123",
+    "user_id": "user-456",
+    "session_title": "October catch-up",
     "status": "active",
-    "created_at": "2025-01-15T10:00:00Z",
-    "updated_at": "2025-01-15T10:30:00Z"
+    "created_at": "2025-10-16T08:00:00Z",
+    "updated_at": "2025-10-16T08:05:00Z"
   },
   "messages": [
     {
-      "id": "msg-uuid",
-      "session_id": "session-uuid",
+      "id": "msg-1",
+      "session_id": "sess-123",
       "role": "user",
-      "content": "I spent $25 on coffee at Starbucks",
-      "created_at": "2025-01-15T10:15:00Z"
+      "content": "I spent $45 at Trader Joe's yesterday",
+      "created_at": "2025-10-16T08:01:00Z"
     },
     {
-      "id": "msg-uuid",
-      "session_id": "session-uuid",
+      "id": "msg-2",
+      "session_id": "sess-123",
       "role": "assistant",
-      "content": "I extracted this expense information...",
-      "created_at": "2025-01-15T10:15:05Z"
+      "content": "I found an expense for $45.00 at Trader Joe's...",
+      "created_at": "2025-10-16T08:01:02Z"
     }
   ]
 }
 ```
 
-### Close Chat Session
+### Close Session
 ```http
 POST /chat/{session_id}/close
 Authorization: Bearer <token>
 ```
-
-**Response** (200 OK):
+**Response 200**
 ```json
 {
   "status": "closed",
-  "session_id": "session-uuid",
+  "session_id": "sess-123",
   "message": "Chat session closed"
 }
 ```
 
-### Get Financial Advice
-```http
-GET /financial-advice
-Authorization: Bearer <token>
-
-Query Parameters:
-  ?period=monthly  (daily, weekly, monthly)
-```
-
-**Response** (200 OK):
-```json
-{
-  "summary": "Your spending this month is 15% higher than average",
-  "insights": [
-    {
-      "category": "Eating Out",
-      "trend": "increasing",
-      "suggestion": "Consider cooking at home to save $50-100/month"
-    }
-  ],
-  "recommendations": [
-    "Set a budget for Eating Out at $300/month",
-    "Track Transportation costs more closely"
-  ],
-  "generated_at": "2025-01-15T10:00:00Z"
-}
-```
-
----
-
-## Error Responses
-
-All errors follow this format:
-
-```json
-{
-  "detail": "Error message describing what went wrong",
-  "error_code": "OPTIONAL_ERROR_CODE"
-}
-```
-
-### Common Status Codes
-- `200`: Success
-- `201`: Created
-- `204`: No Content (successful deletion)
-- `400`: Bad Request (validation error)
-- `401`: Unauthorized (missing/invalid token)
-- `403`: Forbidden (permission denied)
-- `404`: Not Found
-- `409`: Conflict (e.g., duplicate email)
-- `413`: Payload Too Large
-- `422`: Unprocessable Entity (validation error)
-- `500`: Internal Server Error
-
----
-
-## Rate Limiting
-
-Coming soon - API endpoints will have rate limiting:
-- **Standard Users**: 100 requests/minute
-- **Premium Users**: 500 requests/minute
-- **File Uploads**: 10 uploads/minute
-
-Headers will include:
-```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 87
-X-RateLimit-Reset: 1609459200
-```
-
----
-
-## Webhooks
-
-Coming soon - Real-time event notifications:
-- `budget.threshold_reached`
-- `expense.categorized`
-- `invoice.processed`
+## Rate Limiting & Webhooks
+- Rate limiting is not yet enforced but headers may be introduced later (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`).
+- Webhook support (`invoice.processed`, `expense.categorized`, etc.) is planned; no endpoints exist today.

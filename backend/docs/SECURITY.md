@@ -1,419 +1,68 @@
-# Security Hardening Guide
+# Security Guide
 
-## Overview
+## Authentication & Session Management
+- `src/core/security.py` issues HS256 JWTs via `create_access_token`; the default expiry is 60 minutes (`DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES`). Store tokens in HTTP-only, Secure cookies on the client whenever possible.
+- Passwords are hashed with bcrypt (12 rounds). Always call `hash_password` and `verify_password`; never store plaintext or truncated hashes.
+- `OAuth2PasswordBearer` is registered with `tokenUrl="token"`. In production UIs, point it to `/v1/auth/login`. The login endpoint expects `application/x-www-form-urlencoded` credentials (`username`, `password`).
+- `get_current_user` enforces authentication for every router except `/auth/*`. In development (`ENV=development`) the bearer token `mock-token-for-development` resolves to a synthetic user to simplify local testing; disable this shortcut in staging/production.
 
-This document outlines security best practices and hardening measures for the Financial Assistant backend. Financial data requires the highest level of protection.
+## Authorisation & Ownership
+- API routers verify ownership before returning or mutating user data. Examples:  
+  - `invoice_router.get_invoice` checks `invoice['user_id'] != current_user.id`.  
+  - `expense_router.get_expense_by_id` raises `403` when a user attempts to load another user's expense.  
+  - Budget and category operations re-use the authenticated user id supplied by `get_current_user`.
+- Persisted models (SQLAlchemy) enforce foreign keys: Expense <-> User/Category, Invoice <-> User.
 
----
+## Transport & Headers
+- `src/api/main.py` configures CORS to allow any origin in development and a curated allowlist otherwise. Review `ALLOWED_ORIGINS` before release.
+- HTTP middleware injects security headers on every response:  
+  `X-Content-Type-Options=nosniff`, `X-Frame-Options=DENY`, `X-XSS-Protection=1; mode=block`, `Strict-Transport-Security` (one year), and a Content Security Policy for the docs UI. Ensure TLS is enabled so HSTS is effective.
 
-## Authentication & Authorization
-
-### JWT Token Security
-
-1. **Token Expiration**
-   - Access tokens expire after 60 minutes by default
-   - Configure via `ACCESS_TOKEN_EXPIRE_MINUTES` environment variable
-   - Implement refresh token flow for extended sessions
-
-2. **Token Generation**
-   ```python
-   # Use HS256 algorithm (symmetric, fast)
-   from src.core.security import create_access_token
-   
-   token = create_access_token(
-       subject=user_id,
-       expires_delta=timedelta(minutes=60)
-   )
-   ```
-
-3. **Token Storage (Client-side)**
-   - Store in `httpOnly` cookies (not localStorage)
-   - Enable `Secure` flag (HTTPS only)
-   - Enable `SameSite=Strict` to prevent CSRF
-
-### Password Security
-
-1. **Hashing**
-   - Use bcrypt with 12 rounds (CPU-intensive)
-   - Never store plain passwords
-   - Use `src.core.security.hash_password()`
-
-2. **Password Validation**
-   ```python
-   from src.utils.validators import validate_password
-   
-   # Enforces:
-   # - Minimum 8 characters
-   # - At least one uppercase letter
-   # - At least one lowercase letter
-   # - At least one digit
-   # - At least one special character
-   validate_password(user_password)
-   ```
-
-3. **Password Reset Flow**
-   - Use one-time tokens (15-minute expiration)
-   - Invalidate all sessions after password change
-   - Send confirmation emails
-
-### Authorization
-
-1. **Role-Based Access Control (RBAC)**
-   - Users: Basic access to own data
-   - Admins: System-wide access (future)
-   - Implement via middleware and route guards
-
-2. **Resource Ownership Verification**
-   ```python
-   # Always verify user owns resource
-   invoice = db.query(Invoice).filter(
-       Invoice.id == invoice_id,
-       Invoice.user_id == current_user.id  # Ownership check
-   ).first()
-   
-   if not invoice:
-       raise NotFoundError("Invoice not found")
-   ```
-
----
+## Input Validation & Sanitisation
+- Pydantic schemas cover request validation; shared validators live in `src/api/validation.py` and `src/utils/validators.py` (email, password, UUID, amount, etc).
+- Invoice uploads are limited to JPEG/PNG through MIME checks in `invoice_router.process_invoice`; extend this with file-size limits and content sniffing if accepting user uploads in production.
+- Chat corrections are parsed by a Gemini prompt that requests JSON only; responses strip markdown fences and validate with `json.loads`.
+- Use `sanitize_text` and `sanitize_filename` helpers when dealing with user-provided strings outside Pydantic models (e.g., ad-hoc scripts or background workers).
 
 ## Data Protection
-
-### Encryption at Rest
-
-1. **Supabase Features**
-   - All data encrypted in PostgreSQL
-   - Encryption keys managed by Supabase
-   - Enable row-level security (RLS)
-
-2. **Sensitive Fields to Encrypt**
-   - Bank account information (if added)
-   - Tax identification numbers
-   - Social security numbers
-
-### Encryption in Transit
-
-1. **HTTPS/TLS**
-   - Enforce HTTPS in production
-   - Use TLS 1.3+
-   - Certificate renewal via Let's Encrypt
-
-2. **Security Headers**
-   ```python
-   # Implemented in src/api/main.py
-   X-Content-Type-Options: nosniff
-   X-Frame-Options: DENY
-   X-XSS-Protection: 1; mode=block
-   Strict-Transport-Security: max-age=31536000
-   Content-Security-Policy: default-src 'self'
-   ```
-
-### Sensitive Data Handling
-
-1. **Log Masking**
-   ```python
-   # DO NOT log sensitive data
-   logger.info(f"User {user_id} logged in")  # ✓ Good
-   logger.info(f"User {user.password} logged in")  # ✗ Bad
-   ```
-
-2. **Response Filtering**
-   - Never return password hashes to client
-   - Filter sensitive fields in API responses
-   - Use Pydantic `exclude` parameter for schemas
-
-3. **File Uploads**
-   - Validate file content (not just extension)
-   - Store outside web root
-   - Scan for malware before processing
-   - Set proper MIME types
-
----
-
-## Input Validation & Sanitization
-
-### Validation Strategy
-
-1. **Pydantic Models**
-   - Define strict schemas for all inputs
-   - Use type hints and validators
-   - Example:
-   ```python
-   from pydantic import BaseModel, EmailStr, validator
-   
-   class UserCreateRequest(BaseModel):
-       email: EmailStr
-       password: str
-       first_name: str
-       
-       @validator('password')
-       def validate_password_strength(cls, v):
-           from src.utils.validators import validate_password
-           return validate_password(v)
-   ```
-
-2. **Custom Validators**
-   - Use `src.utils.validators` module
-   - Validate email format, amounts, UUIDs, dates
-   - Raise `ValidationError` for invalid inputs
-
-3. **Whitelist Approach**
-   - Only accept known field names
-   - Reject unknown parameters
-   - Use `forbid = True` in Pydantic config
-
-### SQL Injection Prevention
-
-1. **SQLAlchemy ORM**
-   - Always use parameterized queries
-   - Never concatenate strings
-   - ✓ Safe: `User.query.filter(User.email == email)`
-   - ✗ Unsafe: `db.query(f"SELECT * FROM users WHERE email = '{email}'")`
-
-2. **Input Sanitization**
-   - No user input goes directly to SQL
-   - Bind parameters automatically
-   - ORM prevents SQL injection
-
-### XSS Prevention
-
-1. **Response Encoding**
-   - JSON responses automatically escaped
-   - HTML content sanitized if returned
-
-2. **CSP Headers**
-   - Block inline scripts
-   - Block external scripts (unless whitelisted)
-   - Configured in `src/api/main.py`
-
----
-
-## API Security
-
-### Rate Limiting
-
-1. **Implementation**
-   - Per-IP rate limiting (future)
-   - Per-user rate limiting
-   - Different limits for different endpoints
-
-2. **Configuration**
-   ```python
-   # Example implementation
-   RATE_LIMITS = {
-       "/auth/register": "5 per day",
-       "/auth/login": "10 per hour",
-       "/invoices": "100 per hour",
-   }
-   ```
-
-3. **Response Headers**
-   ```
-   X-RateLimit-Limit: 100
-   X-RateLimit-Remaining: 87
-   X-RateLimit-Reset: 1609459200
-   ```
-
-### CORS Configuration
-
-1. **Whitelist Origins**
-   ```python
-   # In production, only allow known frontend URLs
-   ALLOWED_ORIGINS = [
-       "https://app.moniagent.com",
-       "https://www.moniagent.com",
-   ]
-   ```
-
-2. **Restrict Methods**
-   - Only allow necessary HTTP methods
-   - Example: `["GET", "POST", "PUT", "DELETE"]`
-
-3. **Credentials Handling**
-   - Allow credentials for authenticated requests
-   - Properly handle preflight requests
-
-### CSRF Protection
-
-1. **SameSite Cookies**
-   - Set `SameSite=Strict` for authentication cookies
-   - Prevents cross-site request forgery
-
-2. **CSRF Tokens**
-   - Consider for state-changing operations (future)
-   - Validate token on POST/PUT/DELETE requests
-
----
-
-## Audit & Monitoring
-
-### Audit Trail
-
-1. **Log All Security Events**
-   - User login/logout
-   - Permission changes
-   - Data access/modification
-   - Failed authentication attempts
-
-2. **AI Interaction Logging**
-   - Log all calls to AI services
-   - Record inputs and outputs
-   - Track financial data processing
-
-3. **Database Audit Tables**
-   ```python
-   # Example audit logging
-   class AuditLog(Base):
-       __tablename__ = "audit_logs"
-       
-       user_id = Column(String, ForeignKey("users.id"))
-       action = Column(String)  # "login", "create_budget", etc.
-       resource_type = Column(String)  # "invoice", "expense", etc.
-       resource_id = Column(String)
-       changes = Column(JSON)
-       timestamp = Column(DateTime, default=datetime.utcnow)
-   ```
-
-### Security Logging
-
-1. **Log Levels**
-   - ERROR: Security violations, failed auth
-   - WARNING: Suspicious behavior, rate limit hits
-   - INFO: Normal operations, successful auth
-   - DEBUG: Detailed flow (disabled in production)
-
-2. **Monitoring Alerts**
-   - Multiple failed login attempts (>5 in 15 min)
-   - Unusual API access patterns
-   - Database errors
-   - Rate limit exceedances
-
----
-
-## Third-Party Integrations
-
-### Google Gemini API Security
-
-1. **API Key Management**
-   - Store in environment variables (never in code)
-   - Rotate keys regularly
-   - Monitor for unauthorized usage
-
-2. **Request/Response Handling**
-   - Validate all responses from external APIs
-   - Implement timeout limits (30 seconds)
-   - Retry with exponential backoff
-
-### Supabase Security
-
-1. **Database Access**
-   - Use environment-specific keys
-   - Implement Row-Level Security (RLS) policies
-   - Audit database access logs
-
-2. **Admin Operations**
-   - Use service role key only on backend
-   - Never expose to frontend
-   - Implement proper permission checks
-
----
-
-## Security Checklist
-
-### Development Phase
-- [ ] All endpoints require authentication
-- [ ] User resources are ownership-verified
-- [ ] Passwords validated for strength
-- [ ] All inputs validated via Pydantic
-- [ ] Error messages don't leak information
-- [ ] Logs don't contain sensitive data
-- [ ] Security headers configured
-- [ ] CORS properly restricted
-- [ ] No secrets in version control
-- [ ] Dependencies regularly updated
-
-### Deployment Phase
-- [ ] HTTPS/TLS enabled
-- [ ] Rate limiting configured
-- [ ] Database backups automated
-- [ ] Monitoring and alerting active
-- [ ] Security scanning enabled
-- [ ] API documentation doesn't expose internals
-- [ ] Admin endpoints properly restricted
-- [ ] Error tracking configured
-- [ ] Regular security audits scheduled
-- [ ] Incident response plan documented
-
-### Ongoing Operations
-- [ ] Weekly security updates review
-- [ ] Monthly dependency updates
-- [ ] Quarterly penetration testing
-- [ ] Annual security audit
-- [ ] Log analysis for anomalies
-- [ ] User access review quarterly
-- [ ] Backup restoration tests monthly
-- [ ] Security training for team
-
----
-
-## Phase 6 Penetration Testing Checklist
-
-- [ ] Fuzz chat endpoints with malformed JSON and oversized payloads
-- [ ] Attempt SSRF via image URLs (not supported; ensure rejection)
-- [ ] Verify upload validation (content-type, file signature, size limits)
-- [ ] Enumerate auth: rate-limit login and protected routes
-- [ ] Check error messages for leakage (stack traces, SQL info)
-- [ ] Verify RLS and resource ownership checks on invoices/expenses
-- [ ] Test JWT tampering (alg=none, wrong secret)
-- [ ] Confirm AI prompt inputs are sanitized/logged without PII
-
-See also: DEPENDENCY_AUDIT.md for dependency risk notes.
-
----
-
-## Security Incident Response
-
-### Reporting Security Issues
-
-1. **Email**: security@moniagent.com
-2. **Responsible Disclosure**: 
-   - Do not publicly disclose vulnerabilities
-   - Allow 90 days for fixes
-   - Coordinate announcement timing
-
-### Incident Response Steps
-
-1. **Detection & Assessment**
-   - Identify affected systems
-   - Determine scope of compromise
-   - Preserve evidence
-
-2. **Containment**
-   - Isolate affected systems
-   - Revoke compromised credentials
-   - Block malicious IPs
-
-3. **Eradication**
-   - Remove root cause
-   - Patch vulnerabilities
-   - Update security controls
-
-4. **Recovery**
-   - Restore systems from clean backups
-   - Monitor for recurrence
-   - Restore normal operations
-
-5. **Post-Incident**
-   - Notify affected users
-   - Document lessons learned
-   - Update security policies
-
----
-
-## Additional Resources
-
-- [OWASP Top 10](https://owasp.org/Top10/)
-- [OWASP API Security](https://owasp.org/www-project-api-security/)
-- [NIST Cybersecurity Framework](https://www.nist.gov/cyberframework)
-- [CWE/SANS Top 25](https://cwe.mitre.org/top25/)
-- [FastAPI Security Docs](https://fastapi.tiangolo.com/advanced/security/)
+- `src/core/config.py` reads secrets from environment variables. Never commit `.env` files containing production credentials.
+- `src/core/database.py` prefers `DATABASE_URL` or builds a Supabase DSN (with connection pooling). Without env vars it falls back to `sqlite:///./test.db`; do not run production workloads on the default SQLite file.
+- Supabase credentials: use the service role key server-side only, never expose to the front end. Rotate keys on suspicion of leakage.
+- Sensitive fields (password hashes, tokens) are excluded from API responses. Review new schemas carefully to avoid accidental data leaks.
+
+## External Integrations
+- **Google Gemini**: API key retrieved from `GOOGLE_API_KEY`. Calls are wrapped with error handling; malformed replies trigger `ValueError` and return 400/500 to the client. Consider adding request quotas and fallbacks when rate-limited.
+- **LangGraph / LangChain**: Tool bindings call deterministic services only; avoid exposing raw user input to the LLM without sanitisation. Add content filtering if dealing with PII or financial account numbers.
+- **Supabase**: Database interactions rely on SQLAlchemy ORM queries. Enable Row Level Security (RLS) policies in Supabase for an extra protection layer.
+
+## Logging & Monitoring
+- `configure_logging` sets global logging according to `LOG_LEVEL`. Sensitive data (passwords, tokens, invoice contents) must never be logged; current code only logs identifiers and status messages.
+- Gemeni/OCR logs truncate content to avoid sending entire invoices to logs. Continue redacting or hashing identifiers if detailed diagnostics are required.
+- Instrument important flows (invoice uploads, chat confirmation) with structured logs that include request ids or session ids for traceability.
+
+## File Handling
+- Uploaded invoices are streamed; `InvoiceService` should store files outside the web root (currently `backend/uploads`). Ensure this directory is excluded from static serving and backed up securely.
+- Add anti-malware scanning or a proxy service before persisting user files in production.
+
+## Development vs Production
+- Disable debug logging and the mock JWT token when deploying outside development.  
+- Ensure `.env` files are environment-specific; prefer secret managers (Supabase, AWS Secrets Manager, etc.) for production credentials.
+- Replace the placeholder return values in budget endpoints and chat confirm routes before launch; they are currently informational only and may leak deterministic demo data.
+
+## Hardening Checklist
+- [ ] Enforce HTTPS and verify HSTS headers in production.  
+- [ ] Rotate `JWT_SECRET`, Supabase keys, and `GOOGLE_API_KEY` regularly.  
+- [ ] Implement refresh tokens or short-lived access tokens plus reauth if session duration requirements extend beyond 60 minutes.  
+- [ ] Add rate limiting (login, invoice upload, chat) via API gateway or custom middleware.  
+- [ ] Enable alerting on authentication failures, unusual spend extraction, and OCR errors.  
+- [ ] Back up the production database and perform periodic restore drills.  
+- [ ] Run dependency vulnerability scans (`pip-audit`, GitHub dependabot) monthly.  
+- [ ] Conduct penetration testing focusing on file uploads, chat prompt injection, and JWT tampering.  
+- [ ] Ensure Supabase RLS rules match API ownership checks (defence in depth).
+
+## Future Improvements
+- Introduce CSRF protection if session cookies are used.  
+- Add account locking or exponential backoff on repeated authentication failures.  
+- Persist full audit trails for expense corrections and AI-suggested actions.  
+- Extend chat safety with prompt shields or moderation endpoints before forwarding to Gemini.  
+- Capture structured metrics (latency, OCR success rate, LLM token usage) for proactive monitoring.
