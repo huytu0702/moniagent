@@ -52,7 +52,41 @@ ACCESS_TOKEN_EXPIRE_MINUTES=60
 GOOGLE_API_KEY=<your_google_api_key>
 ```
 
-Example values can be found in `env.example`.
+Example values can be found in `.env.example`.
+
+## Running with Docker
+
+To run the application using Docker, follow these steps:
+
+1. Make sure you have Docker and Docker Compose installed on your system.
+
+2. You'll need to configure your Supabase cloud project:
+   - Create a Supabase account at https://supabase.com/
+   - Create a new project
+   - Get your Project URL and Public anon key from the Project Settings > API
+
+3. Create a `.env` file in the backend directory with your environment variables:
+   ```bash
+   cp .env.example .env
+   # Edit .env to add your Supabase project details and other configuration values
+   ```
+
+4. Build and run the services:
+   ```bash
+   docker-compose up --build
+   ```
+
+5. Access the application at `http://localhost:8000`
+
+6. To run in detached mode:
+   ```bash
+   docker-compose up --build -d
+   ```
+
+7. To stop the services:
+   ```bash
+   docker-compose down
+   ```
 
 ## Running Tests
 

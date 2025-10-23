@@ -8,6 +8,7 @@ langchain>=0.0.300
 langgraph>=0.0.10
 supabase>=1.0.4
 google-generativeai>=0.3.0
+langchain-google-genai>=0.0.9
 python-multipart>=0.0.6
 pillow>=10.0.0
 bcrypt>=4.0.1
