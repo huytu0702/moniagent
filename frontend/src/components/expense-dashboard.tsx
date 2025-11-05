@@ -7,7 +7,7 @@ import { MessageSquare, Plus, TrendingDown, TrendingUp, Settings } from "lucide-
 import Link from "next/link"
 import { CategoryCard } from "./category-card"
 import { ExpenseChart } from "./expense-chart"
-import { RecentTransactions } from "./recent-transactions"
+import { RecentTransactions } from "./recent-transaction"
 
 const VIETNAMESE_CATEGORIES = [
   { id: "cat-001", name: "Ăn uống", icon: "🍜", color: "#FF6B6B", spent: 2450000, budget: 3000000 },
