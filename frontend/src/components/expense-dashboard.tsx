@@ -1,31 +1,72 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { MessageSquare, Plus, TrendingDown, TrendingUp, Settings } from "lucide-react"
+import { MessageSquare, TrendingDown, TrendingUp, Settings, RefreshCw } from "lucide-react"
 import Link from "next/link"
 import { CategoryCard } from "./category-card"
 import { ExpenseChart } from "./expense-chart"
 import { RecentTransactions } from "./recent-transaction"
-
-const VIETNAMESE_CATEGORIES = [
-  { id: "cat-001", name: "Ăn uống", icon: "🍜", color: "#FF6B6B", spent: 2450000, budget: 3000000 },
-  { id: "cat-002", name: "Đi lại", icon: "🚗", color: "#4ECDC4", spent: 1200000, budget: 1500000 },
-  { id: "cat-003", name: "Nhà ở", icon: "🏠", color: "#95E1D3", spent: 5000000, budget: 5000000 },
-  { id: "cat-004", name: "Mua sắm", icon: "👕", color: "#F38181", spent: 800000, budget: 2000000 },
-  { id: "cat-005", name: "Giải trí", icon: "🎬", color: "#AA96DA", spent: 650000, budget: 1000000 },
-  { id: "cat-006", name: "Giáo dục", icon: "📚", color: "#FCBAD3", spent: 1500000, budget: 2000000 },
-  { id: "cat-007", name: "Sức khỏe", icon: "💪", color: "#A8E6CF", spent: 450000, budget: 1000000 },
-  { id: "cat-008", name: "Quà tặng", icon: "🎁", color: "#FFD3B6", spent: 300000, budget: 500000 },
-]
+import { dashboardService, CategoryWithSpending, Expense } from "@/lib/api/dashboardService"
+import { toast } from "sonner"
 
 export function ExpenseDashboard() {
-  const [selectedMonth] = useState("Tháng 10, 2025")
+  const [categories, setCategories] = useState<CategoryWithSpending[]>([])
+  const [recentExpenses, setRecentExpenses] = useState<Expense[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const totalSpent = VIETNAMESE_CATEGORIES.reduce((sum, cat) => sum + cat.spent, 0)
-  const totalBudget = VIETNAMESE_CATEGORIES.reduce((sum, cat) => sum + cat.budget, 0)
-  const percentageUsed = (totalSpent / totalBudget) * 100
+  const [selectedMonth] = useState(() => {
+    const now = new Date()
+    return `Tháng ${now.getMonth() + 1}, ${now.getFullYear()}`
+  })
+
+  useEffect(() => {
+    fetchDashboardData()
+  }, [])
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true)
+
+      const now = new Date()
+      const month = now.getMonth()
+      const year = now.getFullYear()
+
+      const categoriesData = await dashboardService.getCategoriesWithSpending(month, year)
+      setCategories(categoriesData)
+
+      const expenses = await dashboardService.getExpenses()
+      const recent = dashboardService.getRecentExpenses(expenses, 10)
+      setRecentExpenses(recent)
+
+    } catch (error: any) {
+      console.error('Error fetching dashboard data:', error)
+      const errorMessage = error.message || 'Không thể tải dữ liệu dashboard'
+
+      toast.error(errorMessage, {
+        description: 'Vui lòng thử lại sau',
+        duration: 5000,
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const totalSpent = categories.reduce((sum, cat) => sum + cat.spent, 0)
+  const totalBudget = categories.reduce((sum, cat) => sum + cat.budget, 0)
+  const percentageUsed = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto"></div>
+          <p className="mt-4 text-muted-foreground">Đang tải dữ liệu...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -38,6 +79,15 @@ export function ExpenseDashboard() {
               <p className="text-sm text-muted-foreground">{selectedMonth}</p>
             </div>
             <div className="flex gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={fetchDashboardData}
+                disabled={loading}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Làm mới
+              </Button>
               <Link href="/settings">
                 <Button variant="outline" size="sm">
                   <Settings className="mr-2 h-4 w-4" />
@@ -50,7 +100,6 @@ export function ExpenseDashboard() {
                   Chat AI
                 </Button>
               </Link>
-              
             </div>
           </div>
         </div>
@@ -63,7 +112,9 @@ export function ExpenseDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Tổng chi tiêu</p>
-                <p className="mt-2 text-3xl font-bold text-foreground">{totalSpent.toLocaleString("vi-VN")}đ</p>
+                <p className="mt-2 text-3xl font-bold text-foreground">
+                  {totalSpent.toLocaleString("vi-VN")}đ
+                </p>
               </div>
               <div className="rounded-full bg-destructive/10 p-3">
                 <TrendingDown className="h-6 w-6 text-destructive" />
@@ -75,7 +126,9 @@ export function ExpenseDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Ngân sách</p>
-                <p className="mt-2 text-3xl font-bold text-foreground">{totalBudget.toLocaleString("vi-VN")}đ</p>
+                <p className="mt-2 text-3xl font-bold text-foreground">
+                  {totalBudget.toLocaleString("vi-VN")}đ
+                </p>
               </div>
               <div className="rounded-full bg-primary/10 p-3">
                 <TrendingUp className="h-6 w-6 text-primary" />
@@ -90,7 +143,9 @@ export function ExpenseDashboard() {
                 <p className="mt-2 text-3xl font-bold text-foreground">
                   {(totalBudget - totalSpent).toLocaleString("vi-VN")}đ
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground">{percentageUsed.toFixed(1)}% đã sử dụng</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {percentageUsed.toFixed(1)}% đã sử dụng
+                </p>
               </div>
               <div className="h-16 w-16">
                 <svg className="h-full w-full -rotate-90 transform">
@@ -121,21 +176,72 @@ export function ExpenseDashboard() {
 
         {/* Categories Grid */}
         <div className="mb-8">
-          <h2 className="mb-4 text-xl font-semibold text-foreground">Danh mục chi tiêu</h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {VIETNAMESE_CATEGORIES.map((category) => (
-              <CategoryCard key={category.id} category={category} />
-            ))}
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold text-foreground">Danh mục chi tiêu</h2>
+            {categories.length > 0 && (
+              <Link href="/settings/budget">
+                <Button variant="outline" size="sm">
+                  Quản lý ngân sách
+                </Button>
+              </Link>
+            )}
           </div>
+
+          {categories.length === 0 ? (
+            <Card className="p-8 text-center">
+              <div className="flex flex-col items-center justify-center">
+                <div className="rounded-full bg-muted p-4 mb-4">
+                  <Settings className="h-8 w-8 text-muted-foreground" />
+                </div>
+                <p className="text-lg font-medium text-foreground mb-2">Chưa có danh mục nào</p>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Vui lòng tạo ngân sách để bắt đầu theo dõi chi tiêu
+                </p>
+                <Link href="/settings/budget">
+                  <Button>
+                    <Settings className="mr-2 h-4 w-4" />
+                    Tạo ngân sách ngay
+                  </Button>
+                </Link>
+              </div>
+            </Card>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {categories.map((category) => (
+                <CategoryCard
+                  key={category.id}
+                  category={{
+                    id: category.id,
+                    name: category.name,
+                    icon: category.icon,
+                    color: category.color,
+                    spent: category.spent,
+                    budget: category.budget,
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Chart */}
-        <div className="mb-8">
-          <ExpenseChart categories={VIETNAMESE_CATEGORIES} />
-        </div>
+        {categories.length > 0 && (
+          <div className="mb-8">
+            <ExpenseChart
+              categories={categories.map(cat => ({
+                id: cat.id,
+                name: cat.name,
+                icon: cat.icon,
+                color: cat.color,
+                spent: cat.spent,
+                budget: cat.budget,
+              }))}
+            />
+          </div>
+        )}
 
         {/* Recent Transactions */}
-        <RecentTransactions />
+        <RecentTransactions expenses={recentExpenses} />
       </main>
     </div>
   )

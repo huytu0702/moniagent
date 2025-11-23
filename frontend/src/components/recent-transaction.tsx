@@ -1,39 +1,96 @@
+"use client"
+
 import { Card } from "@/components/ui/card"
+import { Expense } from "@/lib/api/dashboardService"
+import { ReceiptText } from "lucide-react"
 
-const RECENT_TRANSACTIONS = [
-  { id: "1", merchant: "Starbucks", amount: 85000, date: "2025-10-22", category: "Ăn uống", icon: "🍜" },
-  { id: "2", merchant: "Grab", amount: 45000, date: "2025-10-22", category: "Đi lại", icon: "🚗" },
-  { id: "3", merchant: "Circle K", amount: 120000, date: "2025-10-21", category: "Ăn uống", icon: "🍜" },
-  { id: "4", merchant: "Shopee", amount: 350000, date: "2025-10-21", category: "Mua sắm", icon: "👕" },
-  { id: "5", merchant: "CGV Cinema", amount: 200000, date: "2025-10-20", category: "Giải trí", icon: "🎬" },
-]
+interface RecentTransactionsProps {
+  expenses?: Expense[]
+}
 
-export function RecentTransactions() {
+export function RecentTransactions({ expenses = [] }: RecentTransactionsProps) {
+  const formatCurrency = (amount: number) => {
+    return amount.toLocaleString("vi-VN")
+  }
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString)
+    return date.toLocaleDateString("vi-VN", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    })
+  }
+
+  const getCategoryIcon = (categoryName?: string): string => {
+    if (!categoryName) return "📝"
+
+    const iconMap: Record<string, string> = {
+      "Ăn uống": "🍜",
+      "Đi lại": "🚗",
+      "Nhà ở": "🏠",
+      "Mua sắm cá nhân": "👕",
+      "Mua sắm": "👕",
+      "Giải trí & du lịch": "🎬",
+      "Giải trí": "🎬",
+      "Giáo dục & học tập": "📚",
+      "Giáo dục": "📚",
+      "Sức khỏe & thể thao": "💪",
+      "Sức khỏe": "💪",
+      "Gia đình & quà tặng": "🎁",
+      "Quà tặng": "🎁",
+      "Đầu tư & tiết kiệm": "💰",
+      "Khác": "⚙️",
+    }
+    return iconMap[categoryName] || "📝"
+  }
+
   return (
     <Card className="p-6">
       <h2 className="mb-4 text-xl font-semibold text-foreground">Giao dịch gần đây</h2>
-      <div className="space-y-4">
-        {RECENT_TRANSACTIONS.map((transaction) => (
-          <div
-            key={transaction.id}
-            className="flex items-center justify-between border-b border-border pb-4 last:border-0 last:pb-0"
-          >
-            <div className="flex items-center gap-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">
-                {transaction.icon}
-              </div>
-              <div>
-                <p className="font-medium text-foreground">{transaction.merchant}</p>
-                <p className="text-sm text-muted-foreground">{transaction.category}</p>
-              </div>
+
+      {expenses.length === 0 ? (
+        <div className="py-12 text-center">
+          <div className="flex flex-col items-center justify-center">
+            <div className="rounded-full bg-muted p-4 mb-4">
+              <ReceiptText className="h-8 w-8 text-muted-foreground" />
             </div>
-            <div className="text-right">
-              <p className="font-semibold text-foreground">-{transaction.amount.toLocaleString("vi-VN")}đ</p>
-              <p className="text-sm text-muted-foreground">{transaction.date}</p>
-            </div>
+            <p className="text-lg font-medium text-foreground mb-2">Chưa có giao dịch nào</p>
+            <p className="text-sm text-muted-foreground">
+              Bắt đầu thêm chi tiêu của bạn để theo dõi ngân sách
+            </p>
           </div>
-        ))}
-      </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {expenses.map((expense) => (
+            <div
+              key={expense.id}
+              className="flex items-center justify-between border-b border-border pb-4 last:border-0 last:pb-0"
+            >
+              <div className="flex items-center gap-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">
+                  {getCategoryIcon(expense.category_name)}
+                </div>
+                <div>
+                  <p className="font-medium text-foreground">{expense.merchant_name}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {expense.category_name || "Khác"}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="font-semibold text-foreground">
+                  -{formatCurrency(expense.amount)}đ
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {formatDate(expense.date)}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   )
 }

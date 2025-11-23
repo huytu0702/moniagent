@@ -1,34 +1,51 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Save } from "lucide-react"
+import { ArrowLeft, Save, RefreshCw } from "lucide-react"
 import Link from "next/link"
-
-const VIETNAMESE_CATEGORIES = [
-  { id: "cat-001", name: "Ăn uống", icon: "🍜", color: "#FF6B6B", defaultBudget: 3000000 },
-  { id: "cat-002", name: "Đi lại", icon: "🚗", color: "#4ECDC4", defaultBudget: 1500000 },
-  { id: "cat-003", name: "Nhà ở", icon: "🏠", color: "#95E1D3", defaultBudget: 5000000 },
-  { id: "cat-004", name: "Mua sắm", icon: "👕", color: "#F38181", defaultBudget: 2000000 },
-  { id: "cat-005", name: "Giải trí", icon: "🎬", color: "#AA96DA", defaultBudget: 1000000 },
-  { id: "cat-006", name: "Giáo dục", icon: "📚", color: "#FCBAD3", defaultBudget: 2000000 },
-  { id: "cat-007", name: "Sức khỏe", icon: "💪", color: "#A8E6CF", defaultBudget: 1000000 },
-  { id: "cat-008", name: "Quà tặng", icon: "🎁", color: "#FFD3B6", defaultBudget: 500000 },
-]
+import { budgetService, Budget, Category } from "@/lib/api/budgetService"
+import { toast } from "sonner"
 
 export function BudgetSettings() {
-  const [budgets, setBudgets] = useState(
-    VIETNAMESE_CATEGORIES.reduce(
-      (acc, cat) => ({
-        ...acc,
-        [cat.id]: cat.defaultBudget,
-      }),
-      {} as Record<string, number>,
-    ),
-  )
+  const [categories, setCategories] = useState<Category[]>([])
+  const [budgets, setBudgets] = useState<Record<string, number>>({})
+  const [existingBudgets, setExistingBudgets] = useState<Budget[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    fetchData()
+  }, [])
+
+  const fetchData = async () => {
+    try {
+      setLoading(true)
+      const [categoriesData, budgetsData] = await Promise.all([
+        budgetService.getCategories(),
+        budgetService.getBudgets(),
+      ])
+
+      setCategories(categoriesData)
+      setExistingBudgets(budgetsData)
+
+      // Khởi tạo budgets từ API data
+      const budgetMap: Record<string, number> = {}
+      categoriesData.forEach(cat => {
+        const existingBudget = budgetsData.find(b => b.category_id === cat.id)
+        budgetMap[cat.id] = existingBudget?.limit_amount || 0
+      })
+      setBudgets(budgetMap)
+
+    } catch (error: any) {
+      toast.error(error.message || 'Không thể tải dữ liệu')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleBudgetChange = (categoryId: string, value: string) => {
     const numValue = Number.parseInt(value.replace(/\D/g, "")) || 0
@@ -38,13 +55,57 @@ export function BudgetSettings() {
     }))
   }
 
-  const handleSave = () => {
-    // TODO: Save to backend
-    console.log("Saving budgets:", budgets)
-    alert("Đã lưu cài đặt ngân sách!")
+  const handleSave = async () => {
+    try {
+      setSaving(true)
+
+      // Lưu từng budget
+      for (const category of categories) {
+        const newAmount = budgets[category.id] || 0
+        const existingBudget = existingBudgets.find(b => b.category_id === category.id)
+
+        if (existingBudget) {
+          // Cập nhật nếu đã tồn tại
+          if (existingBudget.limit_amount !== newAmount) {
+            await budgetService.updateBudget(existingBudget.id, {
+              limit_amount: newAmount,
+            })
+          }
+        } else if (newAmount > 0) {
+          // Tạo mới nếu chưa có và amount > 0
+          await budgetService.createBudget({
+            category_id: category.id,
+            limit_amount: newAmount,
+            period: 'monthly',
+            alert_threshold: 0.8,
+          })
+        }
+      }
+
+      toast.success('Đã lưu cài đặt ngân sách!')
+
+      // Refresh data
+      await fetchData()
+
+    } catch (error: any) {
+      toast.error(error.message || 'Không thể lưu ngân sách')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const totalBudget = Object.values(budgets).reduce((sum, budget) => sum + budget, 0)
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto"></div>
+          <p className="mt-4 text-muted-foreground">Đang tải dữ liệu...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -63,10 +124,16 @@ export function BudgetSettings() {
                 <p className="text-sm text-muted-foreground">Thiết lập ngân sách hàng tháng cho từng danh mục</p>
               </div>
             </div>
-            <Button onClick={handleSave}>
-              <Save className="mr-2 h-4 w-4" />
-              Lưu thay đổi
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={fetchData} disabled={loading}>
+                <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Làm mới
+              </Button>
+              <Button onClick={handleSave} disabled={saving}>
+                <Save className="mr-2 h-4 w-4" />
+                {saving ? 'Đang lưu...' : 'Lưu thay đổi'}
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -100,39 +167,53 @@ export function BudgetSettings() {
 
         {/* Budget Settings Grid */}
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-foreground">Ngân sách theo danh mục</h2>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {VIETNAMESE_CATEGORIES.map((category) => (
-              <Card key={category.id} className="p-6">
-                <div className="flex items-start gap-4">
-                  <div
-                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg text-2xl"
-                    style={{ backgroundColor: `${category.color}20` }}
-                  >
-                    {category.icon}
-                  </div>
-                  <div className="flex-1 space-y-2">
-                    <Label htmlFor={category.id} className="text-base font-medium text-foreground">
-                      {category.name}
-                    </Label>
-                    <div className="relative">
-                      <Input
-                        id={category.id}
-                        type="text"
-                        value={budgets[category.id].toLocaleString("vi-VN")}
-                        onChange={(e) => handleBudgetChange(category.id, e.target.value)}
-                        className="pr-8"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">đ</span>
+          <h2 className="text-lg font-semibold text-foreground">
+            Ngân sách theo danh mục ({categories.length} danh mục)
+          </h2>
+
+          {categories.length === 0 ? (
+            <Card className="p-8 text-center">
+              <p className="text-muted-foreground">Chưa có danh mục nào</p>
+            </Card>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {categories.map((category) => {
+                const budgetAmount = budgets[category.id] || 0
+                const percentage = totalBudget > 0 ? ((budgetAmount / totalBudget) * 100).toFixed(1) : '0.0'
+
+                return (
+                  <Card key={category.id} className="p-6">
+                    <div className="flex items-start gap-4">
+                      <div
+                        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg text-2xl"
+                        style={{ backgroundColor: `${category.color}20` }}
+                      >
+                        {category.icon}
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <Label htmlFor={category.id} className="text-base font-medium text-foreground">
+                          {category.name}
+                        </Label>
+                        <div className="relative">
+                          <Input
+                            id={category.id}
+                            type="text"
+                            value={budgetAmount.toLocaleString("vi-VN")}
+                            onChange={(e) => handleBudgetChange(category.id, e.target.value)}
+                            className="pr-8"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">đ</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {percentage}% tổng ngân sách
+                        </p>
+                      </div>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      {((budgets[category.id] / totalBudget) * 100).toFixed(1)}% tổng ngân sách
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         {/* Tips Section */}

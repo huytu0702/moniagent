@@ -85,3 +85,53 @@ export interface ChatHistoryResponse {
   session: ChatSession;
   messages: ChatMessage[];
 }
+
+export interface Expense {
+  id: string;
+  user_id: string;
+  merchant_name: string;
+  amount: number;
+  date: string;
+  category_id: string;
+  category_name?: string;
+  description?: string;
+  confirmed_by_user: boolean;
+  source_type: string;
+  categorization_confidence?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Budget {
+  id: string;
+  user_id: string;
+  category_id: string;
+  category_name: string;
+  limit_amount: number;
+  period: string;
+  spent_amount: number;
+  remaining_amount: number;
+  alert_threshold: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Category {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+  is_system_category: boolean;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DashboardStats {
+  totalExpenses: number;
+  monthlySpending: number;
+  budgetUtilization: number;
+  topCategory: string;
+}
