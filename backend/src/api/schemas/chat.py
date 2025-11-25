@@ -90,12 +90,20 @@ class ChatMessageRequest(BaseModel):
     message_type: str = Field(
         default="text", description="Type of message: text or image"
     )
+    is_confirmation_response: bool = Field(
+        default=False, description="Whether this is a response to confirmation prompt"
+    )
+    saved_expense: Optional[dict] = Field(
+        None, description="Saved expense data (for client-side tracking when is_confirmation_response=True)"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "content": "I spent $25 on coffee at Starbucks today",
                 "message_type": "text",
+                "is_confirmation_response": False,
+                "saved_expense": None,
             }
         }
 
@@ -133,6 +141,9 @@ class ChatMessageResponse(BaseModel):
     )
     budget_warning: Optional[str] = None
     advice: Optional[str] = None
+    interrupted: bool = Field(
+        False, description="Whether graph execution was interrupted (waiting for user response)"
+    )
 
     class Config:
         json_schema_extra = {
@@ -152,6 +163,7 @@ class ChatMessageResponse(BaseModel):
                 "saved_expense": None,
                 "budget_warning": None,
                 "advice": None,
+                "interrupted": False,
             }
         }
 

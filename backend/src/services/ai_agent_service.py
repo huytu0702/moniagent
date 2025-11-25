@@ -5,8 +5,10 @@ AI Agent Service using LangGraph for managing expense tracking conversations
 import logging
 import json
 from typing import Dict, Any, Optional, Tuple, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
+
+from langgraph.checkpoint.memory import InMemorySaver
 
 from src.core.langgraph_agent import LangGraphAIAgent
 from src.services.expense_processing_service import ExpenseProcessingService
@@ -19,21 +21,41 @@ from src.utils.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
+# Confirmation timeout: 10 minutes
+CONFIRMATION_TIMEOUT_MINUTES = 10
+
+# Global shared checkpointer - persists state across requests
+# This is a singleton that maintains conversation state in memory
+_SHARED_CHECKPOINTER: Optional[InMemorySaver] = None
+
+
+def get_shared_checkpointer() -> InMemorySaver:
+    """Get or create the shared checkpointer singleton"""
+    global _SHARED_CHECKPOINTER
+    if _SHARED_CHECKPOINTER is None:
+        logger.info("Creating new shared InMemorySaver checkpointer")
+        _SHARED_CHECKPOINTER = InMemorySaver()
+    return _SHARED_CHECKPOINTER
+
 
 class AIAgentService:
     """
     Service for managing AI-powered expense tracking conversations using LangGraph
     """
 
-    def __init__(self, db_session: Session = None):
+    def __init__(self, db_session: Session = None, checkpointer=None):
         self.db_session = db_session
         self.expense_service = ExpenseProcessingService(db_session)
         self.budget_service = BudgetManagementService(db_session)
         self.advice_service = FinancialAdviceService()
+        
+        # Use SHARED checkpointer for state persistence across requests
+        # This is critical - without shared checkpointer, state is lost between HTTP requests
+        self.checkpointer = checkpointer or get_shared_checkpointer()
         self.langgraph_agent = None
 
         if db_session:
-            self.langgraph_agent = LangGraphAIAgent(db_session)
+            self.langgraph_agent = LangGraphAIAgent(db_session, checkpointer=self.checkpointer)
 
     def get_user_categories(self, user_id: str) -> List[Dict[str, Any]]:
         """
@@ -212,13 +234,19 @@ Hãy trả về JSON không có markdown:"""
         )
 
     def process_message(
-        self, session_id: str, user_message: str, message_type: str = "text"
+        self,
+        session_id: str,
+        user_message: str,
+        message_type: str = "text",
+        is_confirmation_response: bool = False,
+        saved_expense: Optional[Dict[str, Any]] = None,
     ) -> Tuple[
         str,
         Optional[Dict[str, Any]],
         Optional[Dict[str, Any]],
         Optional[Dict[str, Any]],
         Optional[Dict[str, Any]],
+        bool,
         bool,
     ]:
         """
@@ -228,10 +256,12 @@ Hãy trả về JSON không có markdown:"""
             session_id: Chat session ID
             user_message: User message content
             message_type: Type of message ('text' or 'image')
+            is_confirmation_response: Whether this is a response to confirmation prompt
+            saved_expense: Saved expense data (for client-side tracking)
 
         Returns:
             Tuple of (response_text, extracted_expense_data, budget_warning,
-                     financial_advice, saved_expense, asking_confirmation)
+                     financial_advice, saved_expense, asking_confirmation, interrupted)
         """
         try:
             if not self.db_session:
@@ -244,6 +274,12 @@ Hãy trả về JSON không có markdown:"""
             if not session:
                 raise ValidationError(f"Chat session not found: {session_id}")
 
+            # Check for timeout if this is a confirmation response
+            if is_confirmation_response:
+                if self._check_confirmation_timeout(session_id):
+                    logger.info(f"Confirmation timeout for session {session_id}, treating as new message")
+                    is_confirmation_response = False
+
             # Save user message
             user_msg = ChatMessage(
                 session_id=session_id, role="user", content=user_message
@@ -252,12 +288,18 @@ Hãy trả về JSON không có markdown:"""
             self.db_session.commit()
 
             # Process with LangGraph agent
-            result = self.langgraph_agent.run(
-                user_message=user_message,
-                user_id=session.user_id,
-                session_id=session_id,
-                message_type=message_type,
-            )
+            if is_confirmation_response:
+                # Resume interrupted graph
+                logger.info(f"Resuming graph for session {session_id} with user response")
+                result = self.langgraph_agent.resume(session_id, user_message)
+            else:
+                # Initial message - may interrupt
+                result = self.langgraph_agent.run(
+                    user_message=user_message,
+                    user_id=session.user_id,
+                    session_id=session_id,
+                    message_type=message_type,
+                )
 
             # Save AI response
             ai_msg = ChatMessage(
@@ -273,11 +315,33 @@ Hãy trả về JSON không có markdown:"""
                 result.get("financial_advice"),
                 result.get("saved_expense"),
                 result.get("asking_confirmation", False),
+                result.get("interrupted", False),
             )
 
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
             raise
+
+    def _check_confirmation_timeout(self, session_id: str) -> bool:
+        """Check if confirmation has timed out by checking last assistant message"""
+        try:
+            # Get the last assistant message that asked for confirmation
+            last_assistant_msg = (
+                self.db_session.query(ChatMessage)
+                .filter_by(session_id=session_id, role="assistant")
+                .order_by(ChatMessage.created_at.desc())
+                .first()
+            )
+
+            if last_assistant_msg:
+                elapsed = datetime.utcnow() - last_assistant_msg.created_at
+                return elapsed > timedelta(minutes=CONFIRMATION_TIMEOUT_MINUTES)
+
+            # If no assistant message found, assume not timed out (new conversation)
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking timeout: {str(e)}")
+            return False
 
     def confirm_and_save_expense(
         self,
@@ -595,6 +659,9 @@ Hãy trả về JSON không có markdown:"""
         Optional[Dict[str, Any]],
     ]:
         """
+        DEPRECATED: This method is no longer used. Logic moved to LangGraph nodes.
+        Use process_message() with is_confirmation_response=True instead.
+
         Handle user's response to confirmation question (do they want to update?)
 
         Args:
@@ -606,6 +673,9 @@ Hãy trả về JSON không có markdown:"""
         Returns:
             Tuple of (response_text, corrections_dict, budget_warning, financial_advice)
         """
+        logger.warning(
+            "handle_update_confirmation is deprecated. Use process_message() with is_confirmation_response=True"
+        )
         try:
             logger.info(
                 f"Handling update confirmation for session {session_id}, expense {saved_expense.get('id')}"
@@ -711,6 +781,9 @@ Hãy trả về JSON không có markdown:"""
         self, user_message: str
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
+        DEPRECATED: This method is no longer used. Logic moved to LangGraph _detect_update_intent node.
+        Use process_message() with is_confirmation_response=True instead.
+
         Detect if user wants to update expense using Gemini 2.5 Flash Lite model
 
         Args:
@@ -719,6 +792,9 @@ Hãy trả về JSON không có markdown:"""
         Returns:
             Tuple of (wants_update: bool, corrections_dict: Optional[Dict])
         """
+        logger.warning(
+            "detect_update_intent is deprecated. Logic moved to LangGraph nodes."
+        )
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
             from langchain_core.messages import HumanMessage
@@ -802,6 +878,9 @@ Chỉ trả về JSON."""
         self, user_message: str
     ) -> Optional[Dict[str, Any]]:
         """
+        DEPRECATED: This method is no longer used. Logic integrated into LangGraph _detect_update_intent node.
+        Use process_message() with is_confirmation_response=True instead.
+
         Extract correction details from user's message
 
         Args:
@@ -810,6 +889,9 @@ Chỉ trả về JSON."""
         Returns:
             Dictionary with corrections or None
         """
+        logger.warning(
+            "extract_corrections_from_message is deprecated. Logic moved to LangGraph nodes."
+        )
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
             from langchain_core.messages import HumanMessage

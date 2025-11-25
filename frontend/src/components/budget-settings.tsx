@@ -25,56 +25,99 @@ export function BudgetSettings() {
   const [existingBudgets, setExistingBudgets] = useState<Record<string, Budget>>({})
 
   useEffect(() => {
-    const accessToken = authStorage.getToken()
-    if (!accessToken) {
-      router.push("/login")
-      return
-    }
-    setToken(accessToken)
-    fetchBudgetData(accessToken)
-  }, [router])
+    let isMounted = true
 
-  const fetchBudgetData = async (token: string) => {
+    const loadData = async () => {
+      const accessToken = authStorage.getToken()
+      if (!accessToken) {
+        router.push("/login")
+        return
+      }
+      
+      if (!isMounted) return
+      setToken(accessToken)
+      
+      setIsLoading(true)
+      setError("")
+      try {
+        const [categoriesRes, budgetsList] = await Promise.all([
+          categoryAPI.list(accessToken),
+          budgetAPI.list(accessToken),
+        ])
+
+        if (!isMounted) return
+
+        const categoriesData = categoriesRes?.categories || []
+        const budgetsData = budgetsList || []
+
+        setCategories(categoriesData)
+
+        // Create budget maps
+        const budgetAmounts: Record<string, number> = {}
+        const existingBudgetMap: Record<string, Budget> = {}
+
+        budgetsData.forEach(budget => {
+          budgetAmounts[budget.category_id] = budget.limit_amount
+          existingBudgetMap[budget.category_id] = budget
+        })
+
+        categoriesData.forEach(cat => {
+          if (!(cat.id in budgetAmounts)) {
+            budgetAmounts[cat.id] = 0
+          }
+        })
+
+        setBudgets(budgetAmounts)
+        setExistingBudgets(existingBudgetMap)
+      } catch (err) {
+        if (isMounted) {
+          setError(getErrorMessage(err))
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    loadData()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  const fetchBudgetData = async (accessToken: string) => {
     setIsLoading(true)
     setError("")
     try {
       const [categoriesRes, budgetsList] = await Promise.all([
-        categoryAPI.list(token),
-        budgetAPI.list(token),
+        categoryAPI.list(accessToken),
+        budgetAPI.list(accessToken),
       ])
 
-      // Add defensive checks
-      const categories = categoriesRes?.categories || []
-      const budgets = budgetsList || []
+      const categoriesData = categoriesRes?.categories || []
+      const budgetsData = budgetsList || []
 
-      console.log('📊 Fetched categories:', categories.length)
-      console.log('💰 Fetched budgets:', budgets.length, budgets)
+      setCategories(categoriesData)
 
-      setCategories(categories)
-
-      // Create budget maps
       const budgetAmounts: Record<string, number> = {}
       const existingBudgetMap: Record<string, Budget> = {}
 
-      // First, populate from existing budgets
-      budgets.forEach(budget => {
+      budgetsData.forEach(budget => {
         budgetAmounts[budget.category_id] = budget.limit_amount
         existingBudgetMap[budget.category_id] = budget
       })
 
-      // Then, set default 0 ONLY for categories without budgets
-      categories.forEach(cat => {
+      categoriesData.forEach(cat => {
         if (!(cat.id in budgetAmounts)) {
           budgetAmounts[cat.id] = 0
         }
       })
 
-      console.log('💵 Final budget amounts:', budgetAmounts)
-
       setBudgets(budgetAmounts)
       setExistingBudgets(existingBudgetMap)
     } catch (err) {
-      console.error('❌ Error fetching budget data:', err)
       setError(getErrorMessage(err))
     } finally {
       setIsLoading(false)

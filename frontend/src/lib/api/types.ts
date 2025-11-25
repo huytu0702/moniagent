@@ -45,6 +45,8 @@ export interface StartChatResponse {
 export interface SendMessageRequest {
   content: string;
   message_type: 'text' | 'image';
+  is_confirmation_response?: boolean;  // NEW: Whether this is a response to confirmation prompt
+  saved_expense?: SavedExpense | null;  // NEW: Client-side tracking of saved expense
 }
 
 export interface ExtractedExpense {
@@ -61,6 +63,7 @@ export interface SavedExpense {
   amount: number;
   date: string;
   category_id: string;
+  category_name?: string;  // NEW: Display name for category
 }
 
 export interface SendMessageResponse {
@@ -72,6 +75,7 @@ export interface SendMessageResponse {
   saved_expense?: SavedExpense;
   budget_warning?: string;
   advice?: string;
+  interrupted?: boolean;  // NEW: Whether graph execution was interrupted (waiting for user response)
 }
 
 export interface ChatMessage {

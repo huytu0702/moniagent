@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import bcrypt
 import jwt
+from cachetools import TTLCache
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
@@ -62,13 +64,39 @@ def create_access_token(
 def decode_access_token(token: str) -> Dict[str, Any]:
     return jwt.decode(token, _get_jwt_secret(), algorithms=[ALGORITHM])
 
+# Thread-safe user cache with 5-minute TTL
+_user_cache = TTLCache(maxsize=1000, ttl=300)
+_cache_lock = threading.Lock()
+
+
+def _get_cached_user(user_id: str):
+    """Get user from cache if exists."""
+    with _cache_lock:
+        return _user_cache.get(user_id)
+
+
+def _set_cached_user(user_id: str, user):
+    """Set user in cache."""
+    with _cache_lock:
+        _user_cache[user_id] = user
+
+
+def invalidate_user_cache(user_id: str = None):
+    """Invalidate user cache. Call this when user data is updated."""
+    with _cache_lock:
+        if user_id:
+            _user_cache.pop(user_id, None)
+        else:
+            _user_cache.clear()
+
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     """
     Dependency function that retrieves the current user from the access token.
+    Uses caching to avoid database lookups on every request.
     """
     from src.models.user import User
-    from src.core.database import get_db
+    from src.core.database import SessionLocal
     from src.core.config import Settings
 
     credentials_exception = HTTPException(
@@ -95,12 +123,20 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         if user_id is None:
             raise credentials_exception
 
-        # Fetch the actual user from the database
-        db = next(get_db())
+        # Check cache first
+        cached_user = _get_cached_user(user_id)
+        if cached_user is not None:
+            return cached_user
+
+        # Fetch from database only if not cached
+        db = SessionLocal()
         try:
             user = db.query(User).filter(User.id == user_id).first()
             if user is None:
                 raise credentials_exception
+            
+            # Cache the user for subsequent requests
+            _set_cached_user(user_id, user)
             return user
         finally:
             db.close()
@@ -114,4 +150,5 @@ __all__ = [
     "create_access_token",
     "decode_access_token",
     "get_current_user",
+    "invalidate_user_cache",
 ]

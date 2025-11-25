@@ -37,45 +37,101 @@ export function ExpenseDashboard() {
   const selectedMonth = `Tháng ${currentDate.getMonth() + 1}, ${currentDate.getFullYear()}`;
 
   useEffect(() => {
-    const accessToken = authStorage.getToken()
-    if (!accessToken) {
-      router.push("/login")
-      return
-    }
-    setToken(accessToken)
-    fetchDashboardData(accessToken)
-  }, [router])
+    let isMounted = true
+    const controller = new AbortController()
+    
+    const loadData = async () => {
+      const accessToken = authStorage.getToken()
+      if (!accessToken) {
+        router.push("/login")
+        return
+      }
+      
+      if (!isMounted) return
+      setToken(accessToken)
+      
+      // Fetch data with abort signal
+      setIsLoading(true)
+      setError("")
+      try {
+        const [categoriesRes, budgets, expensesData] = await Promise.all([
+          categoryAPI.list(accessToken),
+          budgetAPI.list(accessToken),
+          expenseAPI.list(accessToken),
+        ])
 
-  const fetchDashboardData = async (token: string) => {
+        if (!isMounted) return
+
+        // Calculate spent amount per category from expenses
+        const spentByCategory = expensesData.reduce((acc, expense) => {
+          acc[expense.category_id] = (acc[expense.category_id] || 0) + expense.amount
+          return acc
+        }, {} as Record<string, number>)
+
+        // Create budget map for quick lookup
+        const budgetByCategory = budgets.reduce((acc, budget) => {
+          acc[budget.category_id] = budget.limit_amount
+          return acc
+        }, {} as Record<string, number>)
+
+        // Merge categories with budget and spent data
+        const mergedData: CategoryWithBudget[] = (categoriesRes?.categories || []).map(cat => ({
+          ...cat,
+          spent: spentByCategory[cat.id] || 0,
+          budget: budgetByCategory[cat.id] || 0,
+          icon: cat.icon || "📝",
+          color: cat.color || "#cccccc",
+        }))
+
+        setCategories(mergedData)
+        setExpenses(expensesData)
+      } catch (err) {
+        if (isMounted) {
+          setError(getErrorMessage(err))
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    loadData()
+
+    return () => {
+      isMounted = false
+      controller.abort()
+    }
+  }, [])
+
+  // Refetch function for retry button
+  const refetchData = async () => {
+    if (!token) return
     setIsLoading(true)
     setError("")
     try {
-      // Fetch categories, budgets, and expenses in parallel
       const [categoriesRes, budgets, expensesData] = await Promise.all([
         categoryAPI.list(token),
         budgetAPI.list(token),
         expenseAPI.list(token),
       ])
 
-      // Calculate spent amount per category from expenses
       const spentByCategory = expensesData.reduce((acc, expense) => {
         acc[expense.category_id] = (acc[expense.category_id] || 0) + expense.amount
         return acc
       }, {} as Record<string, number>)
 
-      // Create budget map for quick lookup
       const budgetByCategory = budgets.reduce((acc, budget) => {
         acc[budget.category_id] = budget.limit_amount
         return acc
       }, {} as Record<string, number>)
 
-      // Merge categories with budget and spent data
       const mergedData: CategoryWithBudget[] = (categoriesRes?.categories || []).map(cat => ({
         ...cat,
         spent: spentByCategory[cat.id] || 0,
-        budget: budgetByCategory[cat.id] || 0, // 0 if no budget set
-        icon: cat.icon || "📝", // Default icon
-        color: cat.color || "#cccccc", // Default color
+        budget: budgetByCategory[cat.id] || 0,
+        icon: cat.icon || "📝",
+        color: cat.color || "#cccccc",
       }))
 
       setCategories(mergedData)
@@ -104,7 +160,7 @@ export function ExpenseDashboard() {
     return <div className="flex min-h-screen items-center justify-center">
       <div className="text-center">
         <p className="text-destructive mb-4">{error}</p>
-        <Button onClick={() => token && fetchDashboardData(token)}>Thử lại</Button>
+        <Button onClick={refetchData}>Thử lại</Button>
       </div>
     </div>
   }

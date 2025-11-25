@@ -29,9 +29,11 @@ interface Message {
     amount: number
     date: string
     category_id: string
+    category_name?: string
   }
   budgetWarning?: string
   advice?: string
+  interrupted?: boolean  // NEW: Whether graph execution was interrupted
 }
 
 export function ChatInterface() {
@@ -42,42 +44,63 @@ export function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
   const [token, setToken] = useState<string | null>(null)
+  
+  // Track pending confirmation state for multi-turn flow
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    savedExpense: {
+      id: string
+      merchant_name: string
+      amount: number
+      date: string
+      category_id: string
+    } | null
+    isWaiting: boolean
+  }>({ savedExpense: null, isWaiting: false })
 
   useEffect(() => {
-    // Kiểm tra authentication
-    const accessToken = authStorage.getToken()
-    if (!accessToken) {
-      router.push("/login")
-      return
-    }
-    setToken(accessToken)
+    let isMounted = true
 
-    // Khởi tạo chat session
-    initChatSession(accessToken)
-  }, [router])
-
-  const initChatSession = async (accessToken: string) => {
-    try {
-      const response = await chatAPI.startSession(
-        { session_title: "Chat Session - " + new Date().toLocaleString("vi-VN") },
-        accessToken
-      )
-      setSessionId(response.session_id)
+    const init = async () => {
+      const accessToken = authStorage.getToken()
+      if (!accessToken) {
+        router.push("/login")
+        return
+      }
       
-      // Thêm tin nhắn chào mừng từ AI
-      setMessages([
-        {
-          id: "initial",
-          role: "assistant",
-          content: response.initial_message || "Xin chào! Tôi là trợ lý AI của bạn. Tôi có thể giúp bạn ghi lại chi tiêu, phân tích ngân sách và đưa ra lời khuyên tài chính. Hãy cho tôi biết bạn đã chi tiêu gì hôm nay nhé!",
-          timestamp: new Date(),
-        },
-      ])
-    } catch (err: unknown) {
-      logError(err, 'ChatInterface.initChatSession')
-      setError("Không thể khởi tạo phiên chat. " + getErrorMessage(err))
+      if (!isMounted) return
+      setToken(accessToken)
+
+      try {
+        const response = await chatAPI.startSession(
+          { session_title: "Chat Session - " + new Date().toLocaleString("vi-VN") },
+          accessToken
+        )
+        
+        if (!isMounted) return
+        
+        setSessionId(response.session_id)
+        setMessages([
+          {
+            id: "initial",
+            role: "assistant",
+            content: response.initial_message || "Xin chào! Tôi là trợ lý AI của bạn. Tôi có thể giúp bạn ghi lại chi tiêu, phân tích ngân sách và đưa ra lời khuyên tài chính. Hãy cho tôi biết bạn đã chi tiêu gì hôm nay nhé!",
+            timestamp: new Date(),
+          },
+        ])
+      } catch (err: unknown) {
+        if (isMounted) {
+          logError(err, 'ChatInterface.initChatSession')
+          setError("Không thể khởi tạo phiên chat. " + getErrorMessage(err))
+        }
+      }
     }
-  }
+
+    init()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   const handleSend = async () => {
     if (!input.trim() || !sessionId || !token || isLoading) return
@@ -91,16 +114,30 @@ export function ChatInterface() {
     }
 
     setMessages((prev) => [...prev, userMessage])
+    const messageContent = input
     setInput("")
     setIsLoading(true)
     setError("")
 
     try {
+      // Determine if this is a confirmation response
+      const isConfirmationResponse = pendingConfirmation.isWaiting && pendingConfirmation.savedExpense !== null
+      
       const response = await chatAPI.sendMessage(
         sessionId,
-        { content: input, message_type: "text" },
+        { 
+          content: messageContent, 
+          message_type: "text",
+          is_confirmation_response: isConfirmationResponse,
+          saved_expense: isConfirmationResponse ? pendingConfirmation.savedExpense : undefined,
+        },
         token
       )
+      
+      // Clear pending confirmation after sending
+      if (isConfirmationResponse) {
+        setPendingConfirmation({ savedExpense: null, isWaiting: false })
+      }
 
       // Tạo tin nhắn AI response với unique ID
       const aiMessageId = response.message_id || `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -113,6 +150,7 @@ export function ChatInterface() {
         advice: response.advice,
         askingConfirmation: response.asking_confirmation,
         savedExpense: response.saved_expense,
+        interrupted: response.interrupted,
       }
 
       // Nếu có extracted expense và có đủ thông tin cần thiết
@@ -126,6 +164,15 @@ export function ChatInterface() {
       }
 
       setMessages((prev) => [...prev, aiMessage])
+      
+      // Track confirmation state for multi-turn flow
+      // When interrupted=true or asking_confirmation=true, save the expense for next turn
+      if ((response.interrupted || response.asking_confirmation) && response.saved_expense) {
+        setPendingConfirmation({
+          savedExpense: response.saved_expense,
+          isWaiting: true,
+        })
+      }
     } catch (err: unknown) {
       logError(err, 'ChatInterface.handleSend')
       const errorMessage = getErrorMessage(err, "Có lỗi xảy ra khi gửi tin nhắn")
@@ -211,13 +258,13 @@ export function ChatInterface() {
                     </div>
                   )}
 
-                  {/* Saved Expense (when asking for confirmation) */}
-                  {message.savedExpense && (
+                  {/* Saved Expense (only show when asking for confirmation, not after update) */}
+                  {message.savedExpense && (message.askingConfirmation || message.interrupted) && (
                     <Card className="mt-3 bg-muted/50 p-3">
                       <div className="space-y-2 text-xs">
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Cửa hàng:</span>
-                          <span className="font-medium">{message.savedExpense.merchant_name}</span>
+                          <span className="font-medium">{message.savedExpense.merchant_name || "Không xác định"}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Số tiền:</span>
@@ -227,7 +274,11 @@ export function ChatInterface() {
                         </div>
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Ngày:</span>
-                          <span className="font-medium">{message.savedExpense.date}</span>
+                          <span className="font-medium">{message.savedExpense.date || "Hôm nay"}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Danh mục:</span>
+                          <span className="font-medium">{message.savedExpense.category_name || "Chưa phân loại"}</span>
                         </div>
                       </div>
                     </Card>
@@ -281,7 +332,10 @@ export function ChatInterface() {
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Bạn có thể nhập chi tiêu bằng văn bản hoặc gửi ảnh hóa đơn
+            {pendingConfirmation.isWaiting 
+              ? "💬 Đang chờ bạn xác nhận chi tiêu... (nhắn 'ok' để lưu hoặc cho biết cần sửa gì)"
+              : "Bạn có thể nhập chi tiêu bằng văn bản hoặc gửi ảnh hóa đơn"
+            }
           </p>
         </div>
       </div>

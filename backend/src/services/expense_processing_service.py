@@ -62,44 +62,94 @@ class ExpenseProcessingService:
 
             import re
 
+            # Enhanced amount extraction for Vietnamese formats
+            # Match patterns: 25k, 25K, 25,000đ, 25.000đ, 25000đ, 25000, $25, etc.
+            amount_patterns = [
+                r"(\d+(?:[,\.]\d{3})*)\s*(?:k|K)(?!\w)",  # 25k, 25.000k, 25,000K
+                r"(\d+(?:[,\.]\d{3})*)\s*(?:đ|vnd|VND|₫)",  # 25,000đ, 25000đ
+                r"\$\s*(\d+(?:[,\.]\d{3})*(?:\.\d{2})?)",  # $25, $25.00
+                r"(\d{4,})\s*(?!\w)",  # 25000 (4+ digits without unit)
+            ]
+
             for line in lines:
                 lline = line.lower()
-                # Look for amounts when context suggests a purchase
+                # Look for amounts when context suggests money/purchase
                 if any(
-                    t in lline for t in ["$", "cost", "price", "paid", "spent", "total"]
-                ):
-                    amounts = re.findall(r"\$?[\d,]+\.?\d*", line)
-                    if amounts:
-                        try:
-                            parsed = [
-                                float(a.replace("$", "").replace(",", ""))
-                                for a in amounts
-                            ]
-                            expense_data["amount"] = parsed[0]
-                            if len(parsed) > 1:
-                                # Phase 6: signal multiple amounts to caller
-                                expense_data["amounts"] = parsed
-                        except ValueError:
-                            pass
+                    t in lline
+                    for t in [
+                        "$",
+                        "cost",
+                        "price",
+                        "paid",
+                        "spent",
+                        "total",
+                        "đ",
+                        "vnd",
+                        "k",
+                        "mua",
+                        "chi",
+                        "trả",
+                        "tiền",
+                    ]
+                ) or re.search(r"\d", line):
+                    # Try each pattern
+                    for pattern in amount_patterns:
+                        matches = re.findall(pattern, line)
+                        if matches:
+                            try:
+                                parsed = []
+                                for match in matches:
+                                    # Clean the matched string
+                                    cleaned = match.replace(",", "").replace(".", "")
+                                    if cleaned.isdigit():
+                                        amount = float(cleaned)
 
-                # Look for merchant after keywords like 'at '
-                m = re.search(r"\bat\s+([A-Z][A-Za-z0-9&\-\s]{1,40})", line)
-                if m and not expense_data.get("merchant_name"):
-                    merchant_guess = m.group(1).strip()
-                    # Trim trailing generic words
-                    merchant_guess = re.sub(
-                        r"\s+(yesterday|today|tonight)$", "", merchant_guess, flags=re.I
-                    )
-                    expense_data["merchant_name"] = merchant_guess
+                                        # Check if this is a "k" format in original line
+                                        if re.search(
+                                            rf"{re.escape(match)}\s*[kK](?!\w)", line
+                                        ):
+                                            amount *= 1000  # 25k = 25,000
+
+                                        parsed.append(amount)
+
+                                if parsed:
+                                    expense_data["amount"] = parsed[0]
+                                    if len(parsed) > 1:
+                                        expense_data["amounts"] = parsed
+                                    break  # Found amount, stop trying other patterns
+                            except ValueError:
+                                pass
+
+                    if expense_data["amount"]:
+                        break  # Found amount, stop processing lines
 
             if expense_data["amount"]:
                 expense_data["confidence"] = 0.7
 
-            # Auto-categorize using LLM if user_id provided
-            if user_id and expense_data.get("merchant_name"):
+            # Extract merchant_name using LLM if not already extracted
+            if not expense_data.get("merchant_name"):
                 try:
+                    merchant_name = self._extract_merchant_name_with_llm(text)
+                    if merchant_name:
+                        expense_data["merchant_name"] = merchant_name
+                        logger.info(f"LLM extracted merchant_name: {merchant_name}")
+                except Exception as e:
+                    logger.warning(
+                        f"LLM merchant extraction failed (non-blocking): {str(e)}"
+                    )
+                    # Continue without merchant_name
+
+            # Auto-categorize using LLM if user_id provided
+            # Categorize even without merchant_name - use description
+            if user_id and (
+                expense_data.get("merchant_name") or expense_data.get("description")
+            ):
+                try:
+                    merchant_or_desc = expense_data.get(
+                        "merchant_name"
+                    ) or expense_data.get("description", "")
                     logger.info(
-                        f"Attempting to categorize expense from '{expense_data.get('merchant_name')}' using LLM for user {user_id}"
+                        f"Attempting to categorize expense from '{merchant_or_desc}' using LLM for user {user_id}"
                     )
 
                     # Import AIAgentService to use LLM categorization
@@ -111,8 +161,8 @@ class ExpenseProcessingService:
                         category_id, confidence = (
                             ai_service.categorize_expense_with_llm(
                                 user_id=user_id,
-                                merchant_name=expense_data.get("merchant_name"),
-                                description=expense_data.get("description"),
+                                merchant_name=expense_data.get("merchant_name") or "",
+                                description=expense_data.get("description") or text,
                                 amount=expense_data.get("amount", 0),
                             )
                         )
@@ -129,7 +179,7 @@ class ExpenseProcessingService:
                         else:
                             # Fallback to keyword rules if LLM fails
                             logger.warning(
-                                "LLM categorization failed, falling back to keyword rules"
+                                "LLM categorization returned None, falling back to keyword rules"
                             )
                             self._categorize_with_keywords(user_id, expense_data)
                     else:
@@ -149,6 +199,93 @@ class ExpenseProcessingService:
         except Exception as e:
             logger.error(f"Error extracting expense from text: {str(e)}")
             raise ValidationError(f"Failed to extract expense from text: {str(e)}")
+
+    def _extract_merchant_name_with_llm(self, text: str) -> Optional[str]:
+        """
+        Extract merchant/store name from text using LLM
+
+        Args:
+            text: Text containing expense information
+
+        Returns:
+            Merchant name if found, None otherwise
+        """
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            from langchain_core.messages import HumanMessage
+
+            # Use lite model for lightweight extraction
+            lite_model = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash-lite", temperature=0.1
+            )
+
+            extraction_prompt = f"""Bạn là một chuyên gia trích xuất thông tin chi tiêu. Từ đoạn text sau, hãy trích xuất tên cửa hàng/nơi mua hàng (merchant/store name).
+
+Text: "{text}"
+
+**Yêu cầu:**
+1. Trích xuất tên cửa hàng, cửa tiệm, nhà hàng, hoặc địa điểm mua hàng
+2. KHÔNG trích xuất tên món ăn, đồ uống, hoặc sản phẩm (ví dụ: "cà phê", "phở", "bánh mì" là sản phẩm, không phải cửa hàng)
+3. Nếu có từ khóa chỉ địa điểm như "ở", "tại", "từ" thì tên cửa hàng thường nằm sau các từ này
+4. Tên cửa hàng thường là tên riêng hoặc tên thương hiệu (ví dụ: "Highlands Coffee", "Circle K", "VinMart", "Grab")
+5. Nếu không tìm thấy tên cửa hàng rõ ràng, trả về null
+
+**Ví dụ:**
+- "Tôi vừa mua cà phê ở Highlands Coffee 25k" → "Highlands Coffee"
+- "Ăn phở tại Phở 24 50,000đ" → "Phở 24"
+- "Mua nước ở Circle K 15k" → "Circle K"
+- "Chi Grab 30k" → "Grab"
+- "Mua cà phê 25k" → null (không có tên cửa hàng)
+- "Tôi vừa mua bánh mì 20k" → null (không có tên cửa hàng)
+
+Trả về JSON format (không markdown):
+{{
+  "merchant_name": "Tên cửa hàng hoặc null",
+  "confidence": 0.0-1.0
+}}
+
+Chỉ trả về JSON, không có markdown."""
+
+            response = lite_model.invoke([HumanMessage(content=extraction_prompt)])
+            response_text = response.content.strip()
+
+            logger.debug(f"LLM merchant extraction response: {response_text}")
+
+            # Parse JSON response
+            try:
+                # Clean up markdown if present
+                if "```json" in response_text:
+                    response_text = (
+                        response_text.split("```json")[1].split("```")[0].strip()
+                    )
+                elif "```" in response_text:
+                    response_text = (
+                        response_text.split("```")[1].split("```")[0].strip()
+                    )
+
+                result = json.loads(response_text)
+                merchant_name = result.get("merchant_name")
+
+                # Return None if merchant_name is null, empty, or "null" string
+                if not merchant_name or merchant_name.lower() == "null":
+                    return None
+
+                # Clean and return merchant name
+                merchant_name = merchant_name.strip()
+                if len(merchant_name) > 1:
+                    return merchant_name.title()
+                return None
+
+            except json.JSONDecodeError as e:
+                logger.error(
+                    f"Failed to parse LLM merchant extraction response: {str(e)}"
+                )
+                logger.error(f"Response was: {response_text}")
+                return None
+
+        except Exception as e:
+            logger.warning(f"Error extracting merchant name with LLM: {str(e)}")
+            return None
 
     def _categorize_with_keywords(
         self, user_id: str, expense_data: Dict[str, Any]

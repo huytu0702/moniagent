@@ -15,24 +15,30 @@ export function formatCurrency(amount: number, locale: string = "vi-VN"): string
 /**
  * Format date string or Date object
  */
-export function formatDate(date: string | Date, locale: string = "vi-VN"): string {
+export function formatDate(date: string | Date | null | undefined, locale: string = "vi-VN"): string {
+  if (!date) return "N/A";
   const dateObj = typeof date === 'string' ? new Date(date) : date;
+  if (isNaN(dateObj.getTime())) return "N/A";
   return dateObj.toLocaleDateString(locale);
 }
 
 /**
  * Format time from date
  */
-export function formatTime(date: string | Date, locale: string = "vi-VN"): string {
+export function formatTime(date: string | Date | null | undefined, locale: string = "vi-VN"): string {
+  if (!date) return "N/A";
   const dateObj = typeof date === 'string' ? new Date(date) : date;
+  if (isNaN(dateObj.getTime())) return "N/A";
   return dateObj.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }
 
 /**
  * Format datetime with full details
  */
-export function formatDateTime(date: string | Date, locale: string = "vi-VN"): string {
+export function formatDateTime(date: string | Date | null | undefined, locale: string = "vi-VN"): string {
+  if (!date) return "N/A";
   const dateObj = typeof date === 'string' ? new Date(date) : date;
+  if (isNaN(dateObj.getTime())) return "N/A";
   return dateObj.toLocaleString(locale);
 }
 

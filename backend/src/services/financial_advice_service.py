@@ -128,10 +128,11 @@ class FinancialAdviceService:
 
                 for expense in expenses:
                     analysis["total_spending"] += expense.amount
-                    category = expense.category or "Uncategorized"
-                    if category not in analysis["by_category"]:
-                        analysis["by_category"][category] = 0.0
-                    analysis["by_category"][category] += expense.amount
+                    # Use category name (string), not Category object
+                    category_name = expense.category.name if expense.category else "Uncategorized"
+                    if category_name not in analysis["by_category"]:
+                        analysis["by_category"][category_name] = 0.0
+                    analysis["by_category"][category_name] += expense.amount
 
                 # Find top spending category
                 if analysis["by_category"]:

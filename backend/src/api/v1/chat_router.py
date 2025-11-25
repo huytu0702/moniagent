@@ -3,6 +3,7 @@ Chat API router for AI-powered expense tracking conversations
 """
 
 import logging
+import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.orm import Session
@@ -93,21 +94,32 @@ async def send_chat_message(
             advice,
             saved_expense,
             asking_confirmation,
+            interrupted,
         ) = ai_service.process_message(
             session_id=session_id,
             user_message=request.content,
             message_type=request.message_type,
+            is_confirmation_response=request.is_confirmation_response,
+            saved_expense=request.saved_expense,
         )
 
         # Build response
+        # Handle advice - convert dict to string if present
+        advice_text = None
+        if advice and isinstance(advice, dict):
+            advice_text = advice.get("advice") or advice.get("message")
+        elif advice and isinstance(advice, str):
+            advice_text = advice
+            
         response = ChatMessageResponse(
-            message_id=f"msg-{session_id}",
+            message_id=f"msg-{uuid.uuid4()}",
             response=response_text,
             requires_confirmation=extracted_expense is not None,
             asking_confirmation=asking_confirmation,
             saved_expense=saved_expense,
             budget_warning=budget_warning.get("message") if budget_warning else None,
-            advice=advice,
+            advice=advice_text,
+            interrupted=interrupted,
         )
 
         if extracted_expense:
