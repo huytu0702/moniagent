@@ -1,50 +1,162 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ArrowLeft, Save } from "lucide-react"
 import Link from "next/link"
-
-const VIETNAMESE_CATEGORIES = [
-  { id: "cat-001", name: "Ăn uống", icon: "🍜", color: "#FF6B6B", defaultBudget: 3000000 },
-  { id: "cat-002", name: "Đi lại", icon: "🚗", color: "#4ECDC4", defaultBudget: 1500000 },
-  { id: "cat-003", name: "Nhà ở", icon: "🏠", color: "#95E1D3", defaultBudget: 5000000 },
-  { id: "cat-004", name: "Mua sắm", icon: "👕", color: "#F38181", defaultBudget: 2000000 },
-  { id: "cat-005", name: "Giải trí", icon: "🎬", color: "#AA96DA", defaultBudget: 1000000 },
-  { id: "cat-006", name: "Giáo dục", icon: "📚", color: "#FCBAD3", defaultBudget: 2000000 },
-  { id: "cat-007", name: "Sức khỏe", icon: "💪", color: "#A8E6CF", defaultBudget: 1000000 },
-  { id: "cat-008", name: "Quà tặng", icon: "🎁", color: "#FFD3B6", defaultBudget: 500000 },
-]
+import { authStorage } from "@/lib/auth"
+import { categoryAPI, budgetAPI } from "@/lib/api"
+import { Category, Budget } from "@/lib/api/types"
+import { getErrorMessage } from "@/lib/error-handler"
+import { formatCurrency, calculatePercentage } from "@/lib/utils"
 
 export function BudgetSettings() {
-  const [budgets, setBudgets] = useState(
-    VIETNAMESE_CATEGORIES.reduce(
-      (acc, cat) => ({
-        ...acc,
-        [cat.id]: cat.defaultBudget,
-      }),
-      {} as Record<string, number>,
-    ),
-  )
+  const router = useRouter()
+  const [token, setToken] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState("")
+  const [categories, setCategories] = useState<Category[]>([])
+  const [budgets, setBudgets] = useState<Record<string, number>>({})
+  const [existingBudgets, setExistingBudgets] = useState<Record<string, Budget>>({})
+
+  useEffect(() => {
+    const accessToken = authStorage.getToken()
+    if (!accessToken) {
+      router.push("/login")
+      return
+    }
+    setToken(accessToken)
+    fetchBudgetData(accessToken)
+  }, [router])
+
+  const fetchBudgetData = async (token: string) => {
+    setIsLoading(true)
+    setError("")
+    try {
+      const [categoriesRes, budgetsList] = await Promise.all([
+        categoryAPI.list(token),
+        budgetAPI.list(token),
+      ])
+
+      // Add defensive checks
+      const categories = categoriesRes?.categories || []
+      const budgets = budgetsList || []
+
+      console.log('📊 Fetched categories:', categories.length)
+      console.log('💰 Fetched budgets:', budgets.length, budgets)
+
+      setCategories(categories)
+
+      // Create budget maps
+      const budgetAmounts: Record<string, number> = {}
+      const existingBudgetMap: Record<string, Budget> = {}
+
+      // First, populate from existing budgets
+      budgets.forEach(budget => {
+        budgetAmounts[budget.category_id] = budget.limit_amount
+        existingBudgetMap[budget.category_id] = budget
+      })
+
+      // Then, set default 0 ONLY for categories without budgets
+      categories.forEach(cat => {
+        if (!(cat.id in budgetAmounts)) {
+          budgetAmounts[cat.id] = 0
+        }
+      })
+
+      console.log('💵 Final budget amounts:', budgetAmounts)
+
+      setBudgets(budgetAmounts)
+      setExistingBudgets(existingBudgetMap)
+    } catch (err) {
+      console.error('❌ Error fetching budget data:', err)
+      setError(getErrorMessage(err))
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   const handleBudgetChange = (categoryId: string, value: string) => {
     const numValue = Number.parseInt(value.replace(/\D/g, "")) || 0
-    setBudgets((prev) => ({
-      ...prev,
-      [categoryId]: numValue,
-    }))
+    setBudgets(prev => ({ ...prev, [categoryId]: numValue }))
   }
 
-  const handleSave = () => {
-    // TODO: Save to backend
-    console.log("Saving budgets:", budgets)
-    alert("Đã lưu cài đặt ngân sách!")
+  const handleSave = async () => {
+    if (!token) return
+
+    setIsSaving(true)
+    setError("")
+
+    try {
+      console.log('💾 Starting save operation...')
+      console.log('📝 Current budgets to save:', budgets)
+
+      // Create or update budgets for each category
+      const promises = categories.map(async (category) => {
+        const budgetAmount = budgets[category.id]
+        const existingBudget = existingBudgets[category.id]
+
+        console.log(`Processing ${category.name}:`, { budgetAmount, hasExisting: !!existingBudget })
+
+        if (existingBudget) {
+          // Update existing budget if amount changed
+          if (existingBudget.limit_amount !== budgetAmount) {
+            console.log(`⬆️ Updating budget for ${category.name}: ${existingBudget.limit_amount} → ${budgetAmount}`)
+            return budgetAPI.update(
+              existingBudget.id,
+              { limit_amount: budgetAmount },
+              token
+            )
+          } else {
+            console.log(`⏭️ Skipping ${category.name} - no change`)
+          }
+        } else if (budgetAmount > 0) {
+          // Create new budget only if amount is greater than 0
+          console.log(`➕ Creating new budget for ${category.name}: ${budgetAmount}`)
+          return budgetAPI.create(
+            {
+              category_id: category.id,
+              limit_amount: budgetAmount,
+              period: 'monthly',
+              alert_threshold: 0.8,
+            },
+            token
+          )
+        } else {
+          console.log(`⏭️ Skipping ${category.name} - amount is 0`)
+        }
+      })
+
+      const results = await Promise.all(promises)
+      console.log('✅ Save completed. Results:', results)
+
+      // Refresh data after save
+      console.log('🔄 Refreshing budget data...')
+      await fetchBudgetData(token)
+
+      alert("Đã lưu cài đặt ngân sách!")
+    } catch (err) {
+      console.error('❌ Save failed:', err)
+      setError(getErrorMessage(err))
+      alert("Có lỗi xảy ra khi lưu ngân sách: " + getErrorMessage(err))
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const totalBudget = Object.values(budgets).reduce((sum, budget) => sum + budget, 0)
+
+  // Loading state
+  if (isLoading) {
+    return <div className="flex min-h-screen items-center justify-center">
+      <p className="text-muted-foreground">Đang tải dữ liệu...</p>
+    </div>
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -63,21 +175,32 @@ export function BudgetSettings() {
                 <p className="text-sm text-muted-foreground">Thiết lập ngân sách hàng tháng cho từng danh mục</p>
               </div>
             </div>
-            <Button onClick={handleSave}>
-              <Save className="mr-2 h-4 w-4" />
-              Lưu thay đổi
+            <Button onClick={handleSave} disabled={isSaving}>
+              {isSaving ? (
+                <span className="animate-spin mr-2">⏳</span>
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              {isSaving ? "Đang lưu..." : "Lưu thay đổi"}
             </Button>
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+        {error && (
+          <Card className="mb-8 p-4 bg-destructive/10 text-destructive">
+            <p>Lỗi: {error}</p>
+            <Button variant="link" onClick={() => token && fetchBudgetData(token)}>Thử lại</Button>
+          </Card>
+        )}
+
         {/* Total Budget Summary */}
         <Card className="mb-8 p-6">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-muted-foreground">Tổng ngân sách hàng tháng</p>
-              <p className="mt-2 text-4xl font-bold text-primary">{totalBudget.toLocaleString("vi-VN")}đ</p>
+              <p className="mt-2 text-4xl font-bold text-primary">{formatCurrency(totalBudget)}</p>
             </div>
             <div className="rounded-full bg-primary/10 p-4">
               <svg
@@ -102,14 +225,14 @@ export function BudgetSettings() {
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-foreground">Ngân sách theo danh mục</h2>
           <div className="grid gap-4 sm:grid-cols-2">
-            {VIETNAMESE_CATEGORIES.map((category) => (
+            {categories.map((category) => (
               <Card key={category.id} className="p-6">
                 <div className="flex items-start gap-4">
                   <div
                     className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg text-2xl"
-                    style={{ backgroundColor: `${category.color}20` }}
+                    style={{ backgroundColor: `${category.color || "#cccccc"}20` }}
                   >
-                    {category.icon}
+                    {category.icon || "📝"}
                   </div>
                   <div className="flex-1 space-y-2">
                     <Label htmlFor={category.id} className="text-base font-medium text-foreground">
@@ -119,14 +242,14 @@ export function BudgetSettings() {
                       <Input
                         id={category.id}
                         type="text"
-                        value={budgets[category.id].toLocaleString("vi-VN")}
+                        value={formatCurrency(budgets[category.id] || 0).replace("đ", "")}
                         onChange={(e) => handleBudgetChange(category.id, e.target.value)}
                         className="pr-8"
                       />
                       <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">đ</span>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {((budgets[category.id] / totalBudget) * 100).toFixed(1)}% tổng ngân sách
+                      {calculatePercentage(budgets[category.id] || 0, totalBudget).toFixed(1)}% tổng ngân sách
                     </p>
                   </div>
                 </div>

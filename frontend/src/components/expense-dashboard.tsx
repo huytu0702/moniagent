@@ -1,31 +1,113 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { MessageSquare, Plus, TrendingDown, TrendingUp, Settings } from "lucide-react"
+import { MessageSquare, TrendingDown, TrendingUp, Settings } from "lucide-react"
 import Link from "next/link"
 import { CategoryCard } from "./category-card"
 import { ExpenseChart } from "./expense-chart"
 import { RecentTransactions } from "./recent-transaction"
+import { authStorage } from "@/lib/auth"
+import { categoryAPI, budgetAPI, expenseAPI } from "@/lib/api"
+import { Category, Expense } from "@/lib/api/types"
+import { getErrorMessage } from "@/lib/error-handler"
+import { formatCurrency, calculatePercentage } from "@/lib/utils"
 
-const VIETNAMESE_CATEGORIES = [
-  { id: "cat-001", name: "Ăn uống", icon: "🍜", color: "#FF6B6B", spent: 2450000, budget: 3000000 },
-  { id: "cat-002", name: "Đi lại", icon: "🚗", color: "#4ECDC4", spent: 1200000, budget: 1500000 },
-  { id: "cat-003", name: "Nhà ở", icon: "🏠", color: "#95E1D3", spent: 5000000, budget: 5000000 },
-  { id: "cat-004", name: "Mua sắm", icon: "👕", color: "#F38181", spent: 800000, budget: 2000000 },
-  { id: "cat-005", name: "Giải trí", icon: "🎬", color: "#AA96DA", spent: 650000, budget: 1000000 },
-  { id: "cat-006", name: "Giáo dục", icon: "📚", color: "#FCBAD3", spent: 1500000, budget: 2000000 },
-  { id: "cat-007", name: "Sức khỏe", icon: "💪", color: "#A8E6CF", spent: 450000, budget: 1000000 },
-  { id: "cat-008", name: "Quà tặng", icon: "🎁", color: "#FFD3B6", spent: 300000, budget: 500000 },
-]
+// Create a merged data structure for rendering
+interface CategoryWithBudget extends Category {
+  spent: number;
+  budget: number;
+  // Ensure these are always strings for the UI
+  icon: string;
+  color: string;
+}
 
 export function ExpenseDashboard() {
-  const [selectedMonth] = useState("Tháng 10, 2025")
+  const router = useRouter()
+  const [token, setToken] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [categories, setCategories] = useState<CategoryWithBudget[]>([])
+  const [expenses, setExpenses] = useState<Expense[]>([])
+  
+  // Format current month for display
+  const currentDate = new Date();
+  const selectedMonth = `Tháng ${currentDate.getMonth() + 1}, ${currentDate.getFullYear()}`;
 
-  const totalSpent = VIETNAMESE_CATEGORIES.reduce((sum, cat) => sum + cat.spent, 0)
-  const totalBudget = VIETNAMESE_CATEGORIES.reduce((sum, cat) => sum + cat.budget, 0)
-  const percentageUsed = (totalSpent / totalBudget) * 100
+  useEffect(() => {
+    const accessToken = authStorage.getToken()
+    if (!accessToken) {
+      router.push("/login")
+      return
+    }
+    setToken(accessToken)
+    fetchDashboardData(accessToken)
+  }, [router])
+
+  const fetchDashboardData = async (token: string) => {
+    setIsLoading(true)
+    setError("")
+    try {
+      // Fetch categories, budgets, and expenses in parallel
+      const [categoriesRes, budgets, expensesData] = await Promise.all([
+        categoryAPI.list(token),
+        budgetAPI.list(token),
+        expenseAPI.list(token),
+      ])
+
+      // Calculate spent amount per category from expenses
+      const spentByCategory = expensesData.reduce((acc, expense) => {
+        acc[expense.category_id] = (acc[expense.category_id] || 0) + expense.amount
+        return acc
+      }, {} as Record<string, number>)
+
+      // Create budget map for quick lookup
+      const budgetByCategory = budgets.reduce((acc, budget) => {
+        acc[budget.category_id] = budget.limit_amount
+        return acc
+      }, {} as Record<string, number>)
+
+      // Merge categories with budget and spent data
+      const mergedData: CategoryWithBudget[] = (categoriesRes?.categories || []).map(cat => ({
+        ...cat,
+        spent: spentByCategory[cat.id] || 0,
+        budget: budgetByCategory[cat.id] || 0, // 0 if no budget set
+        icon: cat.icon || "📝", // Default icon
+        color: cat.color || "#cccccc", // Default color
+      }))
+
+      setCategories(mergedData)
+      setExpenses(expensesData)
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Calculate totals
+  const totalSpent = categories.reduce((sum, cat) => sum + cat.spent, 0)
+  const totalBudget = categories.reduce((sum, cat) => sum + cat.budget, 0)
+  const percentageUsed = calculatePercentage(totalSpent, totalBudget)
+
+  // Render loading state
+  if (isLoading) {
+    return <div className="flex min-h-screen items-center justify-center">
+      <p className="text-muted-foreground">Đang tải dữ liệu...</p>
+    </div>
+  }
+
+  // Render error state
+  if (error) {
+    return <div className="flex min-h-screen items-center justify-center">
+      <div className="text-center">
+        <p className="text-destructive mb-4">{error}</p>
+        <Button onClick={() => token && fetchDashboardData(token)}>Thử lại</Button>
+      </div>
+    </div>
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -63,7 +145,7 @@ export function ExpenseDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Tổng chi tiêu</p>
-                <p className="mt-2 text-3xl font-bold text-foreground">{totalSpent.toLocaleString("vi-VN")}đ</p>
+                <p className="mt-2 text-3xl font-bold text-foreground">{formatCurrency(totalSpent)}</p>
               </div>
               <div className="rounded-full bg-destructive/10 p-3">
                 <TrendingDown className="h-6 w-6 text-destructive" />
@@ -75,7 +157,7 @@ export function ExpenseDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Ngân sách</p>
-                <p className="mt-2 text-3xl font-bold text-foreground">{totalBudget.toLocaleString("vi-VN")}đ</p>
+                <p className="mt-2 text-3xl font-bold text-foreground">{formatCurrency(totalBudget)}</p>
               </div>
               <div className="rounded-full bg-primary/10 p-3">
                 <TrendingUp className="h-6 w-6 text-primary" />
@@ -88,7 +170,7 @@ export function ExpenseDashboard() {
               <div>
                 <p className="text-sm text-muted-foreground">Còn lại</p>
                 <p className="mt-2 text-3xl font-bold text-foreground">
-                  {(totalBudget - totalSpent).toLocaleString("vi-VN")}đ
+                  {formatCurrency(totalBudget - totalSpent)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">{percentageUsed.toFixed(1)}% đã sử dụng</p>
               </div>
@@ -110,7 +192,7 @@ export function ExpenseDashboard() {
                     stroke="currentColor"
                     strokeWidth="8"
                     fill="transparent"
-                    strokeDasharray={`${percentageUsed * 1.76} 176`}
+                    strokeDasharray={`${Math.min(percentageUsed, 100) * 1.76} 176`}
                     className="text-primary"
                   />
                 </svg>
@@ -122,20 +204,24 @@ export function ExpenseDashboard() {
         {/* Categories Grid */}
         <div className="mb-8">
           <h2 className="mb-4 text-xl font-semibold text-foreground">Danh mục chi tiêu</h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {VIETNAMESE_CATEGORIES.map((category) => (
-              <CategoryCard key={category.id} category={category} />
-            ))}
-          </div>
+          {categories.length === 0 ? (
+             <p className="text-muted-foreground text-center py-8">Chưa có danh mục nào</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {categories.map((category) => (
+                <CategoryCard key={category.id} category={category} />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Chart */}
         <div className="mb-8">
-          <ExpenseChart categories={VIETNAMESE_CATEGORIES} />
+          <ExpenseChart categories={categories} />
         </div>
 
         {/* Recent Transactions */}
-        <RecentTransactions />
+        <RecentTransactions expenses={expenses} categories={categories} />
       </main>
     </div>
   )

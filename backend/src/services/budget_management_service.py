@@ -72,6 +72,23 @@ class BudgetManagementService:
                     "Alert threshold must be between 0 and 1"
                 )
 
+            # Use provided session or fall back to instance session
+            session_to_use = db_session or self.db_session
+            if not session_to_use:
+                raise BudgetManagementServiceError("Database session not available")
+
+            # Check if budget already exists for this category
+            existing_budget = (
+                session_to_use.query(Budget)
+                .filter(Budget.user_id == user_id, Budget.category_id == category_id)
+                .first()
+            )
+
+            if existing_budget:
+                raise BudgetManagementServiceError(
+                    f"Budget already exists for this category. Use update instead."
+                )
+
             # Create new budget
             budget_id = str(uuid4())
             budget = Budget(
@@ -83,26 +100,36 @@ class BudgetManagementService:
                 alert_threshold=alert_threshold,
             )
 
+            # Save to database
+            session_to_use.add(budget)
+            session_to_use.commit()
+            session_to_use.refresh(budget)
+
             # Calculate spent amount
             spent_amount = self._calculate_spent_amount(
-                user_id, category_id, period, db_session
+                user_id, category_id, period, session_to_use
             )
 
-            # Get timestamps
-            now = datetime.utcnow()
+            # Get category name
+            category = (
+                session_to_use.query(Category)
+                .filter(Category.id == category_id)
+                .first()
+            )
+            category_name = category.name if category else "Unknown"
 
             return {
-                "id": budget_id,
-                "user_id": user_id,
-                "category_id": category_id,
-                "category_name": "Unknown",  # Will be populated by router
-                "limit_amount": limit_amount,
-                "period": period,
+                "id": budget.id,
+                "user_id": budget.user_id,
+                "category_id": budget.category_id,
+                "category_name": category_name,
+                "limit_amount": budget.limit_amount,
+                "period": budget.period,
                 "spent_amount": spent_amount,
-                "remaining_amount": limit_amount - spent_amount,
-                "alert_threshold": alert_threshold,
-                "created_at": now.isoformat(),
-                "updated_at": now.isoformat(),
+                "remaining_amount": budget.limit_amount - spent_amount,
+                "alert_threshold": budget.alert_threshold,
+                "created_at": budget.created_at.isoformat() if budget.created_at else datetime.utcnow().isoformat(),
+                "updated_at": budget.updated_at.isoformat() if budget.updated_at else datetime.utcnow().isoformat(),
             }
 
         except BudgetManagementServiceError as e:
@@ -130,10 +157,48 @@ class BudgetManagementService:
         try:
             logger.info(f"Fetching budgets for user {user_id}")
 
-            budgets = []
-            # This would normally query from db_session, but for now return empty list
-            # The router will handle the actual database queries
+            # Use provided session or fall back to instance session
+            session_to_use = db_session or self.db_session
+            if not session_to_use:
+                raise BudgetManagementServiceError("Database session not available")
 
+            # Query all budgets for this user
+            budget_records = (
+                session_to_use.query(Budget)
+                .filter(Budget.user_id == user_id)
+                .all()
+            )
+
+            budgets = []
+            for budget in budget_records:
+                # Calculate spent amount for this budget
+                spent_amount = self._calculate_spent_amount(
+                    user_id, budget.category_id, budget.period, session_to_use
+                )
+
+                # Get category name
+                category = (
+                    session_to_use.query(Category)
+                    .filter(Category.id == budget.category_id)
+                    .first()
+                )
+                category_name = category.name if category else "Unknown"
+
+                budgets.append({
+                    "id": budget.id,
+                    "user_id": budget.user_id,
+                    "category_id": budget.category_id,
+                    "category_name": category_name,
+                    "limit_amount": budget.limit_amount,
+                    "period": budget.period,
+                    "spent_amount": spent_amount,
+                    "remaining_amount": budget.limit_amount - spent_amount,
+                    "alert_threshold": budget.alert_threshold,
+                    "created_at": budget.created_at.isoformat() if budget.created_at else datetime.utcnow().isoformat(),
+                    "updated_at": budget.updated_at.isoformat() if budget.updated_at else datetime.utcnow().isoformat(),
+                })
+
+            logger.info(f"Found {len(budgets)} budgets for user {user_id}")
             return budgets
 
         except Exception as e:
@@ -176,19 +241,63 @@ class BudgetManagementService:
                     "Alert threshold must be between 0 and 1"
                 )
 
-            # Mock response for update
+            # Use provided session or fall back to instance session
+            session_to_use = db_session or self.db_session
+            if not session_to_use:
+                raise BudgetManagementServiceError("Database session not available")
+
+            # Get existing budget
+            budget = (
+                session_to_use.query(Budget)
+                .filter(Budget.id == budget_id, Budget.user_id == user_id)
+                .first()
+            )
+
+            if not budget:
+                raise BudgetManagementServiceError(
+                    f"Budget {budget_id} not found for user {user_id}"
+                )
+
+            # Update fields if provided
+            if limit_amount is not None:
+                budget.limit_amount = limit_amount
+            if alert_threshold is not None:
+                budget.alert_threshold = alert_threshold
+            if period is not None:
+                budget.period = period
+
+            # Update timestamp
+            budget.updated_at = datetime.utcnow()
+
+            # Save to database
+            session_to_use.commit()
+            session_to_use.refresh(budget)
+
+            # Calculate spent amount
+            spent_amount = self._calculate_spent_amount(
+                user_id, budget.category_id, budget.period, session_to_use
+            )
+
+            # Get category name
+            category = (
+                session_to_use.query(Category)
+                .filter(Category.id == budget.category_id)
+                .first()
+            )
+            category_name = category.name if category else "Unknown"
+
             return {
-                "id": budget_id,
-                "user_id": user_id,
-                "category_id": "cat-1",
-                "category_name": "Category",
-                "limit_amount": limit_amount or 500.0,
-                "period": period or "monthly",
-                "spent_amount": 250.0,
-                "remaining_amount": (limit_amount or 500.0) - 250.0,
-                "alert_threshold": alert_threshold or 0.8,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
+                "id": budget.id,
+                "user_id": budget.user_id,
+                "category_id": budget.category_id,
+                "category_name": category_name,
+                "limit_amount": budget.limit_amount,
+                "period": budget.period,
+                "spent_amount": spent_amount,
+                "remaining_amount": budget.limit_amount - spent_amount,
+                "alert_threshold": budget.alert_threshold,
+                "created_at": budget.created_at.isoformat() if budget.created_at else datetime.utcnow().isoformat(),
+                "updated_at": budget.updated_at.isoformat() if budget.updated_at else datetime.utcnow().isoformat(),
             }
 
         except BudgetManagementServiceError as e:

@@ -95,3 +95,104 @@ export interface ChatHistoryResponse {
   session: ChatSession;
   messages: ChatMessage[];
 }
+
+// Category Types
+export interface Category {
+  id: string;
+  user_id: string;
+  name: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  is_system_category: boolean;
+  display_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CategoryListResponse {
+  categories: Category[];
+}
+
+// Budget Types
+export interface Budget {
+  id: string;
+  user_id: string;
+  category_id: string;
+  category_name: string;
+  limit_amount: number;
+  period: string;
+  spent_amount: number;
+  remaining_amount: number;
+  alert_threshold: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateBudgetRequest {
+  category_id: string;
+  limit_amount: number;
+  period: 'monthly' | 'weekly' | 'yearly';
+  alert_threshold?: number;
+}
+
+export interface UpdateBudgetRequest {
+  limit_amount?: number;
+  period?: 'monthly' | 'weekly' | 'yearly';
+  alert_threshold?: number;
+}
+
+export interface BudgetListResponse {
+  budgets: Budget[];
+}
+
+// Expense Types
+export interface Expense {
+  id: string;
+  user_id: string;
+  merchant_name: string;
+  amount: number;
+  date: string;
+  category_id: string;
+  category_name?: string;
+  description?: string;
+  confirmed_by_user: boolean;
+  source_type: string;
+  categorization_confidence?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateExpenseRequest {
+  merchant_name: string;
+  amount: number;
+  date: string;
+  category_id?: string; // Optional - auto-categorizes if omitted
+  description?: string;
+}
+
+export interface UpdateExpenseRequest {
+  merchant_name?: string;
+  amount?: number;
+  date?: string;
+  category_id?: string;
+  description?: string;
+}
+
+export interface ExpenseListResponse {
+  expenses: Expense[];
+}
+
+export interface BudgetWarning {
+  category_id: string;
+  category_name: string;
+  limit: number;
+  spent: number;
+  total_with_new_expense: number;
+  remaining: number;
+  percentage_used: number;
+  alert_threshold: number;
+  warning: boolean;
+  alert_level: string;
+  message: string;
+}
