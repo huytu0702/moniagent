@@ -48,14 +48,16 @@ class AIAgentService:
         self.expense_service = ExpenseProcessingService(db_session)
         self.budget_service = BudgetManagementService(db_session)
         self.advice_service = FinancialAdviceService()
-        
+
         # Use SHARED checkpointer for state persistence across requests
         # This is critical - without shared checkpointer, state is lost between HTTP requests
         self.checkpointer = checkpointer or get_shared_checkpointer()
         self.langgraph_agent = None
 
         if db_session:
-            self.langgraph_agent = LangGraphAIAgent(db_session, checkpointer=self.checkpointer)
+            self.langgraph_agent = LangGraphAIAgent(
+                db_session, checkpointer=self.checkpointer
+            )
 
     def get_user_categories(self, user_id: str) -> List[Dict[str, Any]]:
         """
@@ -240,6 +242,7 @@ Hãy trả về JSON không có markdown:"""
         message_type: str = "text",
         is_confirmation_response: bool = False,
         saved_expense: Optional[Dict[str, Any]] = None,
+        image_file: Optional[Any] = None,
     ) -> Tuple[
         str,
         Optional[Dict[str, Any]],
@@ -258,6 +261,7 @@ Hãy trả về JSON không có markdown:"""
             message_type: Type of message ('text' or 'image')
             is_confirmation_response: Whether this is a response to confirmation prompt
             saved_expense: Saved expense data (for client-side tracking)
+            image_file: Image file object (BytesIO) for image messages
 
         Returns:
             Tuple of (response_text, extracted_expense_data, budget_warning,
@@ -277,7 +281,9 @@ Hãy trả về JSON không có markdown:"""
             # Check for timeout if this is a confirmation response
             if is_confirmation_response:
                 if self._check_confirmation_timeout(session_id):
-                    logger.info(f"Confirmation timeout for session {session_id}, treating as new message")
+                    logger.info(
+                        f"Confirmation timeout for session {session_id}, treating as new message"
+                    )
                     is_confirmation_response = False
 
             # Save user message
@@ -290,7 +296,9 @@ Hãy trả về JSON không có markdown:"""
             # Process with LangGraph agent
             if is_confirmation_response:
                 # Resume interrupted graph
-                logger.info(f"Resuming graph for session {session_id} with user response")
+                logger.info(
+                    f"Resuming graph for session {session_id} with user response"
+                )
                 result = self.langgraph_agent.resume(session_id, user_message)
             else:
                 # Initial message - may interrupt
@@ -299,6 +307,7 @@ Hãy trả về JSON không có markdown:"""
                     user_id=session.user_id,
                     session_id=session_id,
                     message_type=message_type,
+                    image_file=image_file,  # Pass image file for processing
                 )
 
             # Save AI response

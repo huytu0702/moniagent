@@ -31,6 +31,36 @@ export const chatAPI = {
   },
 
   /**
+   * Gửi ảnh hóa đơn trong phiên chat
+   */
+  sendImageMessage: async (
+    sessionId: string,
+    file: File,
+    content?: string,
+    isConfirmationResponse?: boolean,
+    savedExpense?: any,
+    token?: string
+  ): Promise<SendMessageResponse> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (content) {
+      formData.append('content', content);
+    }
+    if (isConfirmationResponse !== undefined) {
+      formData.append('is_confirmation_response', isConfirmationResponse.toString());
+    }
+    if (savedExpense) {
+      formData.append('saved_expense', JSON.stringify(savedExpense));
+    }
+
+    return apiClient.postMultipart<SendMessageResponse>(
+      `/chat/${sessionId}/message/image`,
+      formData,
+      token
+    );
+  },
+
+  /**
    * Xác nhận expense từ chat
    */
   confirmExpense: async (

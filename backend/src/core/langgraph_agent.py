@@ -2,7 +2,7 @@
 LangGraph implementation for the AI financial assistant
 """
 
-from typing import Dict, List, TypedDict, Annotated, Union, Optional
+from typing import Dict, List, TypedDict, Annotated, Union, Optional, Any
 import operator
 import json
 import logging
@@ -99,6 +99,10 @@ class LangGraphAIAgent:
         # Initialize checkpointer for state persistence
         self.checkpointer = checkpointer or InMemorySaver()
 
+        # Temporary storage for image files (not serializable in state)
+        # Key: session_id, Value: image_file BytesIO
+        self._image_files: Dict[str, Any] = {}
+
         # Initialize LLM - use gemini-2.5-flash-lite for lightweight operations
         self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.1)
         self.lite_model = ChatGoogleGenerativeAI(
@@ -123,11 +127,14 @@ class LangGraphAIAgent:
         messages = state.get("messages", [])
         if not messages or len(messages) == 0:
             logger.warning("No messages in state for expense extraction")
-            return {"extracted_expense": None}
 
-        user_message = messages[-1].content
+        user_message = messages[-1].content if messages else ""
         message_type = state.get("message_type", "text")
         user_id = state.get("user_id")
+        session_id = state.get("session_id")
+
+        # Get image_file from temporary storage (not serializable in state)
+        image_file = self._image_files.get(session_id) if session_id else None
 
         extracted_expense = None
         if message_type == "text":
@@ -135,10 +142,23 @@ class LangGraphAIAgent:
                 user_message, user_id=user_id
             )
         elif message_type == "image":
-            # Assuming user_message contains image path for this implementation
-            extracted_expense = self.expense_service.extract_expense_from_image(
-                user_message
-            )
+            # Use image_file if available, otherwise fallback to user_message as path
+            if image_file:
+                # Reset file pointer before processing
+                image_file.seek(0)
+                extracted_expense = self.expense_service.extract_expense_from_image(
+                    image_file, user_id=user_id  # Pass user_id for auto-categorization
+                )
+                # Clear from temporary storage after use
+                if session_id in self._image_files:
+                    del self._image_files[session_id]
+            else:
+                # Fallback: assume user_message contains image path
+                logger.warning("No image_file provided, using user_message as path")
+                extracted_expense = self.expense_service.extract_expense_from_image(
+                    user_message,
+                    user_id=user_id,  # Pass user_id for auto-categorization
+                )
 
         return {"extracted_expense": extracted_expense}
 
@@ -931,16 +951,29 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
         user_id: str,
         session_id: str,
         message_type: str = "text",
+        image_file: Optional[Any] = None,
     ) -> Dict:
-        """Run the AI agent with the given input - may result in interrupt"""
+        """Run the AI agent with the given input - may result in interrupt
+
+        Args:
+            user_message: User message text
+            user_id: User ID
+            session_id: Session ID
+            message_type: Type of message ('text' or 'image')
+            image_file: Image file object (BytesIO) for image messages
+        """
         config = {"configurable": {"thread_id": session_id}}
+
+        # Store image_file temporarily (not in state - not serializable)
+        if image_file and message_type == "image":
+            self._image_files[session_id] = image_file
 
         initial_state = {
             "messages": [HumanMessage(content=user_message)],
             "user_id": user_id,
             "session_id": session_id,
             "message_type": message_type,
-            # NOTE: db_session is NOT in state - use self.db_session in node methods
+            # NOTE: db_session and image_file are NOT in state - use self.db_session and self._image_files
             "saved_expense": {},
             "asking_confirmation": False,
             "awaiting_user_response": False,

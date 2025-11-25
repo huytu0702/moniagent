@@ -5,12 +5,14 @@ Chat API router for AI-powered expense tracking conversations
 import logging
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from sqlalchemy.orm import Session
+from io import BytesIO
 
 from src.core.database import get_db
 from src.core.security import get_current_user
 from src.services.ai_agent_service import AIAgentService
+from src.utils.image_utils import validate_image_content_type, validate_file_size
 from src.api.schemas.chat import (
     ChatStartRequest,
     ChatStartResponse,
@@ -71,7 +73,7 @@ async def send_chat_message(
     db: Session = Depends(get_db),
 ):
     """
-    Send a message in a chat session
+    Send a text message in a chat session
 
     Args:
         session_id: Chat session ID
@@ -92,7 +94,7 @@ async def send_chat_message(
             extracted_expense,
             budget_warning,
             advice,
-            saved_expense,
+            saved_expense_result,
             asking_confirmation,
             interrupted,
         ) = ai_service.process_message(
@@ -116,7 +118,7 @@ async def send_chat_message(
             response=response_text,
             requires_confirmation=extracted_expense is not None,
             asking_confirmation=asking_confirmation,
-            saved_expense=saved_expense,
+            saved_expense=saved_expense_result,
             budget_warning=budget_warning.get("message") if budget_warning else None,
             advice=advice_text,
             interrupted=interrupted,
@@ -131,6 +133,115 @@ async def send_chat_message(
 
     except Exception as e:
         logger.error(f"Error processing chat message: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{session_id}/message/image", response_model=ChatMessageResponse)
+async def send_image_message(
+    session_id: str,
+    file: UploadFile = File(...),
+    content: Optional[str] = Form(None),
+    is_confirmation_response: Optional[bool] = Form(False),
+    saved_expense: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Send an image message in a chat session (for invoice/receipt uploads)
+    
+    Args:
+        session_id: Chat session ID
+        file: Image file upload
+        content: Optional text content to accompany the image
+        is_confirmation_response: Whether this is a response to confirmation prompt
+        saved_expense: Saved expense data as JSON string (for confirmation responses)
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        ChatMessageResponse with AI response and extracted expense info
+    """
+    try:
+        user_id = current_user.id if hasattr(current_user, "id") else current_user["id"]
+        logger.info(f"Processing image message for session {session_id}, user {user_id}")
+
+        # Validate image file
+        if not validate_image_content_type(file.content_type):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type. Allowed types: image/jpeg, image/jpg, image/png"
+            )
+        
+        # Validate file size (max 10MB)
+        file_data = await file.read()
+        file_size_valid = validate_file_size(BytesIO(file_data), max_size_mb=10)
+        if not file_size_valid:
+            raise HTTPException(
+                status_code=400,
+                detail="File size exceeds maximum allowed size (10MB)"
+            )
+        
+        # Reset file pointer for processing
+        image_file = BytesIO(file_data)
+        
+        # Use provided text content or default message
+        user_message = content or "Đã tải lên ảnh hóa đơn"
+        
+        # Parse saved_expense if provided
+        saved_expense_dict = None
+        if saved_expense:
+            import json
+            try:
+                saved_expense_dict = json.loads(saved_expense)
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse saved_expense JSON: {saved_expense}")
+
+        ai_service = AIAgentService(db)
+        (
+            response_text,
+            extracted_expense,
+            budget_warning,
+            advice,
+            saved_expense_result,
+            asking_confirmation,
+            interrupted,
+        ) = ai_service.process_message(
+            session_id=session_id,
+            user_message=user_message,
+            message_type="image",
+            is_confirmation_response=is_confirmation_response,
+            saved_expense=saved_expense_dict,
+            image_file=image_file,  # Pass image file for OCR processing
+        )
+
+        # Build response
+        # Handle advice - convert dict to string if present
+        advice_text = None
+        if advice and isinstance(advice, dict):
+            advice_text = advice.get("advice") or advice.get("message")
+        elif advice and isinstance(advice, str):
+            advice_text = advice
+            
+        response = ChatMessageResponse(
+            message_id=f"msg-{uuid.uuid4()}",
+            response=response_text,
+            requires_confirmation=extracted_expense is not None,
+            asking_confirmation=asking_confirmation,
+            saved_expense=saved_expense_result,
+            budget_warning=budget_warning.get("message") if budget_warning else None,
+            advice=advice_text,
+            interrupted=interrupted,
+        )
+
+        if extracted_expense:
+            from src.api.schemas.chat import ExtractedExpenseInfo
+
+            response.extracted_expense = ExtractedExpenseInfo(**extracted_expense)
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error processing image message: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

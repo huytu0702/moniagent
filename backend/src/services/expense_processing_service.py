@@ -350,28 +350,87 @@ Chỉ trả về JSON, không có markdown."""
                 f"Keyword categorization fallback failed (non-blocking): {str(e)}"
             )
 
-    def extract_expense_from_image(self, image_data) -> Dict[str, Any]:
+    def extract_expense_from_image(
+        self, image_data, user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Extract expense information from invoice image using OCR
+        Extract expense information from invoice image using OCR and auto-categorize using LLM
 
         Args:
             image_data: Image file data
+            user_id: Optional user ID to enable LLM-based auto-categorization
 
         Returns:
-            Dictionary with extracted expense data
+            Dictionary with extracted expense data including optional category_id and confidence_score
         """
         try:
             logger.info("Extracting expense from image using OCR")
 
             ocr_result = self.ocr_service.process_invoice(image_data)
 
-            return {
+            expense_data = {
                 "merchant_name": ocr_result.get("store_name"),
                 "amount": ocr_result.get("total_amount", 0),
                 "date": ocr_result.get("date"),
                 "confidence": 0.9,  # OCR usually has high confidence
                 "description": "Extracted from invoice image",
             }
+
+            # Auto-categorize using LLM if user_id provided (similar to extract_expense_from_text)
+            if user_id and (
+                expense_data.get("merchant_name") or expense_data.get("description")
+            ):
+                try:
+                    merchant_or_desc = expense_data.get(
+                        "merchant_name"
+                    ) or expense_data.get("description", "")
+                    logger.info(
+                        f"Attempting to categorize expense from image (merchant: '{merchant_or_desc}') using LLM for user {user_id}"
+                    )
+
+                    # Import AIAgentService to use LLM categorization
+                    if self.db_session:
+                        from src.services.ai_agent_service import AIAgentService
+
+                        ai_service = AIAgentService(self.db_session)
+                        category_id, confidence = (
+                            ai_service.categorize_expense_with_llm(
+                                user_id=user_id,
+                                merchant_name=expense_data.get("merchant_name") or "",
+                                description=expense_data.get("description")
+                                or "Extracted from invoice image",
+                                amount=expense_data.get("amount", 0),
+                            )
+                        )
+
+                        if category_id:
+                            expense_data["category_id"] = category_id
+                            expense_data["suggested_category_id"] = category_id
+                            expense_data["categorization_confidence"] = (
+                                confidence or 0.8
+                            )
+                            logger.info(
+                                f"LLM categorized expense from image to {category_id} with confidence {confidence}"
+                            )
+                        else:
+                            # Fallback to keyword rules if LLM fails
+                            logger.warning(
+                                "LLM categorization returned None, falling back to keyword rules"
+                            )
+                            self._categorize_with_keywords(user_id, expense_data)
+                    else:
+                        logger.warning("No DB session available for LLM categorization")
+                        self._categorize_with_keywords(user_id, expense_data)
+
+                except Exception as e:
+                    # Don't fail extraction if categorization fails
+                    logger.warning(
+                        f"Auto-categorization failed (non-blocking): {str(e)}"
+                    )
+                    # Fallback to keyword rules
+                    self._categorize_with_keywords(user_id, expense_data)
+
+            return expense_data
 
         except Exception as e:
             logger.error(f"Error extracting expense from image: {str(e)}")

@@ -112,6 +112,25 @@ class APIClient {
     return this.handleResponse<T>(response);
   }
 
+  async postMultipart<T>(endpoint: string, formData: FormData, token?: string, options?: RequestInit): Promise<T> {
+    const headers: HeadersInit = {};
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    // Don't set Content-Type - browser will set it with boundary for multipart/form-data
+
+    const response = await fetch(`${this.baseURL}${endpoint}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      ...options,
+      cache: options?.cache || 'no-store',
+    });
+
+    return this.handleResponse<T>(response);
+  }
+
   async put<T>(endpoint: string, data: any, token?: string, options?: RequestInit): Promise<T> {
     const response = await fetch(`${this.baseURL}${endpoint}`, {
       method: 'PUT',
