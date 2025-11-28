@@ -152,7 +152,7 @@ def valid_expense_data():
         "price": 25.50,
         "location": "Coffee Shop",
         "date": datetime.now().date().isoformat(),
-        "category_id": "test-category-id",
+        "category_id": "00000000-0000-0000-0000-000000000002",
         "description": "Morning coffee",
     }
 
@@ -193,7 +193,7 @@ def valid_user_data():
 def valid_budget_data():
     """Generate valid budget data"""
     return {
-        "category_id": "test-category-id",
+        "category_id": "00000000-0000-0000-0000-000000000002",
         "monthly_limit": 500.00,
         "currency": "USD",
     }
@@ -296,9 +296,9 @@ def test_user(test_db_session):
     from src.models.user import User
 
     user = User(
-        id="test-user-id",
+        id="00000000-0000-0000-0000-000000000001",
         email="test@example.com",
-        hashed_password="hashed_password_here",
+        password_hash="hashed_password_here",
         first_name="Test",
         last_name="User",
     )
@@ -314,8 +314,8 @@ def test_category(test_db_session):
     from src.models.category import Category
 
     category = Category(
-        id="test-category-id",
-        user_id="test-user-id",
+        id="00000000-0000-0000-0000-000000000002",
+        user_id="00000000-0000-0000-0000-000000000001",
         name="Food & Dining",
         description="Food and dining expenses",
     )
@@ -332,7 +332,7 @@ def test_expense(test_db_session, test_user, test_category):
     from datetime import datetime
 
     expense = Expense(
-        id="test-expense-id",
+        id="00000000-0000-0000-0000-000000000003",
         user_id=test_user.id,
         category_id=test_category.id,
         merchant_name="Test Coffee Shop",

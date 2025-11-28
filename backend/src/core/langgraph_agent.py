@@ -294,6 +294,7 @@ Hãy xác định:
    - merchant_name: (tên cửa hàng mới nếu có, để null nếu không đề cập)
    - amount: (số tiền mới nếu có, để null nếu không đề cập)
    - date: (ngày mới nếu có, để null nếu không đề cập)
+   - category_name: (tên danh mục mới nếu có, để null nếu không đề cập)
    
    QUAN TRỌNG: Người dùng có thể yêu cầu sửa NHIỀU trường cùng lúc!
    Ví dụ: "sửa cửa hàng thành starbucks và ngày thành 25/11/2025" → cần trích xuất CẢ HAI
@@ -307,6 +308,7 @@ QUAN TRỌNG về date:
 
 Ví dụ phân tích:
 - "sửa cửa hàng thành starbucks và ngày thành 25/11/2025" → wants_update: true, corrections: {{"merchant_name": "starbucks", "date": "2025-11-25"}}
+- "đổi danh mục sang ăn uống" → wants_update: true, corrections: {{"category_name": "Ăn uống"}}
 - "ok" → wants_update: false, corrections: {{}}
 - "sửa ngày thành 26/11/2025" → wants_update: true, corrections: {{"date": "2025-11-26"}}
    
@@ -316,7 +318,8 @@ Trả về JSON format:
   "corrections": {{
     "merchant_name": "..." hoặc null,
     "amount": 123.45 hoặc null,
-    "date": "YYYY-MM-DD" hoặc null
+    "date": "YYYY-MM-DD" hoặc null,
+    "category_name": "..." hoặc null
   }},
   "reason": "Giải thích tại sao"
 }}
@@ -455,6 +458,21 @@ Chỉ trả về JSON, không có markdown."""
                             except ValueError:
                                 pass
 
+                    # Try to extract category
+                    category_patterns = [
+                        r'(?:sửa|thay|đổi|chuyển)\s+(?:danh\s+mục|loại|nhóm).*?thành\s+([^\s]+(?:\s+[^\s]+)*?)(?:\s+và|\s+ngày|\s+amount|\s+cửa\s+hàng|$|\.)',
+                        r'(?:danh\s+mục|loại|nhóm).*?thành\s+([^\s]+(?:\s+[^\s]+)*?)(?:\s+và|\s+ngày|\s+amount|\s+cửa\s+hàng|$|\.)',
+                    ]
+                    for pattern in category_patterns:
+                        cat_match = re.search(pattern, user_message, re.IGNORECASE)
+                        if cat_match:
+                            category_name = cat_match.group(1).strip()
+                            # Remove common words
+                            category_name = re.sub(r'\s+(và|and|,)\s*$', '', category_name, flags=re.IGNORECASE)
+                            if category_name and len(category_name) > 1:
+                                corrections["category_name"] = category_name
+                                break
+
                 logger.warning(
                     f"Using fallback extraction. wants_update: {wants_update}, corrections: {corrections}"
                 )
@@ -463,6 +481,48 @@ Chỉ trả về JSON, không có markdown."""
         except Exception as e:
             logger.error(f"Error detecting update intent: {str(e)}")
             return {"wants_update": False, "corrections": {}}
+
+    def _resolve_category(self, category_name: str, user_id: str) -> tuple[Optional[str], Optional[str]]:
+        """Resolve category name to ID"""
+        if not category_name or not user_id or not self.db_session:
+            return None, None
+            
+        from src.models.category import Category
+        from sqlalchemy import func
+        
+        # 1. Try exact match
+        category = self.db_session.query(Category).filter(
+            Category.user_id == user_id,
+            func.lower(Category.name) == category_name.lower()
+        ).first()
+        
+        if category:
+            return str(category.id), category.name
+            
+        # 2. Try partial match
+        categories = self.db_session.query(Category).filter(
+            Category.user_id == user_id
+        ).all()
+        
+        # Simple fuzzy match
+        best_match = None
+        best_score = 0
+        
+        category_name_lower = category_name.lower()
+        
+        for cat in categories:
+            cat_name_lower = cat.name.lower()
+            if category_name_lower in cat_name_lower or cat_name_lower in category_name_lower:
+                # Prefer the one that is contained in the other
+                score = len(category_name_lower) / len(cat_name_lower) if len(cat_name_lower) > len(category_name_lower) else len(cat_name_lower) / len(category_name_lower)
+                if score > best_score:
+                    best_score = score
+                    best_match = cat
+                    
+        if best_match and best_score > 0.5:
+            return str(best_match.id), best_match.name
+            
+        return None, None
 
     def _process_update(self, state: AgentState) -> Dict:
         """Process corrections to pending expense (NOT saved yet) - returns to ask_confirmation"""
@@ -491,6 +551,21 @@ Chỉ trả về JSON, không có markdown."""
             "category_name": saved_expense.get("category_name") or "Chưa phân loại",
         }
 
+        # Handle category update specifically
+        if "category_name" in corrections:
+            user_id = state.get("user_id")
+            new_cat_id, new_cat_name = self._resolve_category(corrections["category_name"], user_id)
+            if new_cat_id:
+                updated_pending_expense["category_id"] = new_cat_id
+                updated_pending_expense["category_name"] = new_cat_name
+                # Also update corrections to reflect the resolved name
+                corrections["category_name"] = new_cat_name
+            else:
+                # Could not resolve category - keep as is but maybe warn user?
+                # For now just keep the text the user provided as a hint, but don't change ID
+                # Or maybe we shouldn't change anything if we can't resolve it
+                pass
+
         # Also update extracted_expense for when we save
         updated_extracted = state.get("extracted_expense", {}).copy()
         if "merchant_name" in corrections:
@@ -499,6 +574,8 @@ Chỉ trả về JSON, không có markdown."""
             updated_extracted["amount"] = corrections["amount"]
         if "date" in corrections:
             updated_extracted["date"] = corrections["date"]
+        if "category_name" in corrections and updated_pending_expense.get("category_id"):
+             updated_extracted["category_id"] = updated_pending_expense["category_id"]
 
         logger.info(f"Expense corrections applied (pending): {corrections}")
 

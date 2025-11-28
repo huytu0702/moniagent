@@ -108,6 +108,7 @@ def validate_amount(amount: Any, field_name: str = "Amount") -> float:
         ValidationError: If validation fails
     """
     try:
+        print(f"DEBUG: validate_amount called with {amount} type={type(amount)}")
         amount_float = float(amount)
     except (TypeError, ValueError):
         raise ValidationError(f"{field_name} must be a valid number")
