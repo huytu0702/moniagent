@@ -1,8 +1,11 @@
 import type { Metadata, Viewport } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
+import { AppProvider } from "@/contexts/app-context"
+import { ToastProvider } from "@/contexts/toast-context"
+import { GlobalToastContainer } from "@/components/ui/global-toast-container"
 
-const inter = Inter({ 
+const inter = Inter({
   subsets: ["latin"],
   display: "swap",
   variable: "--font-inter",
@@ -47,7 +50,12 @@ export default function RootLayout({
   return (
     <html lang="vi" suppressHydrationWarning>
       <body className={`${inter.variable} ${inter.className} antialiased`}>
-        {children}
+        <ToastProvider>
+          <AppProvider>
+            {children}
+          </AppProvider>
+          <GlobalToastContainer />
+        </ToastProvider>
       </body>
     </html>
   )

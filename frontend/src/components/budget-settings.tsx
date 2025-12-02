@@ -1,198 +1,164 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Save } from "lucide-react"
+import { ArrowLeft, Save, Home, MessageSquare } from "lucide-react"
 import Link from "next/link"
 import { authStorage } from "@/lib/auth"
-import { categoryAPI, budgetAPI } from "@/lib/api"
-import { Category, Budget } from "@/lib/api/types"
+import { budgetAPI } from "@/lib/api"
+import { Budget } from "@/lib/api/types"
 import { getErrorMessage } from "@/lib/error-handler"
 import { formatCurrency, calculatePercentage } from "@/lib/utils"
+import { useGlobalToast } from "@/contexts/toast-context"
+import { useAppData } from "@/contexts/app-context"
 
 export function BudgetSettings() {
   const router = useRouter()
+  const { addToast, updateToast, removeToast } = useGlobalToast()
+  const { categories, budgets: budgetsList, isLoading, refreshBudgets } = useAppData()
   const [token, setToken] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
-  const [error, setError] = useState("")
-  const [categories, setCategories] = useState<Category[]>([])
-  const [budgets, setBudgets] = useState<Record<string, number>>({})
-  const [existingBudgets, setExistingBudgets] = useState<Record<string, Budget>>({})
+  const [budgetAmounts, setBudgetAmounts] = useState<Record<string, number>>({})
 
+  // Check authentication
   useEffect(() => {
-    let isMounted = true
+    const accessToken = authStorage.getToken()
+    if (!accessToken) {
+      router.push("/login")
+      return
+    }
+    setToken(accessToken)
+  }, [router])
 
-    const loadData = async () => {
-      const accessToken = authStorage.getToken()
-      if (!accessToken) {
-        router.push("/login")
-        return
+  // Create budget maps using useMemo
+  const existingBudgets = useMemo(() => {
+    const existingBudgetMap: Record<string, Budget> = {}
+    budgetsList.forEach(budget => {
+      existingBudgetMap[budget.category_id] = budget
+    })
+    return existingBudgetMap
+  }, [budgetsList])
+
+  // Initialize budget amounts when data loads
+  useEffect(() => {
+    const budgetMap: Record<string, number> = {}
+
+    budgetsList.forEach(budget => {
+      budgetMap[budget.category_id] = budget.limit_amount
+    })
+
+    categories.forEach(cat => {
+      if (!(cat.id in budgetMap)) {
+        budgetMap[cat.id] = 0
       }
-      
-      if (!isMounted) return
-      setToken(accessToken)
-      
-      setIsLoading(true)
-      setError("")
-      try {
-        const [categoriesRes, budgetsList] = await Promise.all([
-          categoryAPI.list(accessToken),
-          budgetAPI.list(accessToken),
-        ])
+    })
 
-        if (!isMounted) return
+    setBudgetAmounts(budgetMap)
+  }, [categories, budgetsList])
 
-        const categoriesData = categoriesRes?.categories || []
-        const budgetsData = budgetsList || []
-
-        setCategories(categoriesData)
-
-        // Create budget maps
-        const budgetAmounts: Record<string, number> = {}
-        const existingBudgetMap: Record<string, Budget> = {}
-
-        budgetsData.forEach(budget => {
-          budgetAmounts[budget.category_id] = budget.limit_amount
-          existingBudgetMap[budget.category_id] = budget
-        })
-
-        categoriesData.forEach(cat => {
-          if (!(cat.id in budgetAmounts)) {
-            budgetAmounts[cat.id] = 0
-          }
-        })
-
-        setBudgets(budgetAmounts)
-        setExistingBudgets(existingBudgetMap)
-      } catch (err) {
-        if (isMounted) {
-          setError(getErrorMessage(err))
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false)
-        }
-      }
-    }
-
-    loadData()
-
-    return () => {
-      isMounted = false
-    }
-  }, [])
-
-  const fetchBudgetData = async (accessToken: string) => {
-    setIsLoading(true)
-    setError("")
-    try {
-      const [categoriesRes, budgetsList] = await Promise.all([
-        categoryAPI.list(accessToken),
-        budgetAPI.list(accessToken),
-      ])
-
-      const categoriesData = categoriesRes?.categories || []
-      const budgetsData = budgetsList || []
-
-      setCategories(categoriesData)
-
-      const budgetAmounts: Record<string, number> = {}
-      const existingBudgetMap: Record<string, Budget> = {}
-
-      budgetsData.forEach(budget => {
-        budgetAmounts[budget.category_id] = budget.limit_amount
-        existingBudgetMap[budget.category_id] = budget
-      })
-
-      categoriesData.forEach(cat => {
-        if (!(cat.id in budgetAmounts)) {
-          budgetAmounts[cat.id] = 0
-        }
-      })
-
-      setBudgets(budgetAmounts)
-      setExistingBudgets(existingBudgetMap)
-    } catch (err) {
-      setError(getErrorMessage(err))
-    } finally {
-      setIsLoading(false)
-    }
+  const fetchBudgetData = async () => {
+    await refreshBudgets()
   }
 
   const handleBudgetChange = (categoryId: string, value: string) => {
     const numValue = Number.parseInt(value.replace(/\D/g, "")) || 0
-    setBudgets(prev => ({ ...prev, [categoryId]: numValue }))
+    setBudgetAmounts(prev => ({ ...prev, [categoryId]: numValue }))
   }
 
   const handleSave = async () => {
     if (!token) return
 
-    setIsSaving(true)
-    setError("")
-
-    try {
-      console.log('💾 Starting save operation...')
-      console.log('📝 Current budgets to save:', budgets)
-
-      // Create or update budgets for each category
-      const promises = categories.map(async (category) => {
-        const budgetAmount = budgets[category.id]
+    // Prepare all API requests
+    const requests = categories
+      .map((category) => {
+        const budgetAmount = budgetAmounts[category.id]
         const existingBudget = existingBudgets[category.id]
 
-        console.log(`Processing ${category.name}:`, { budgetAmount, hasExisting: !!existingBudget })
-
         if (existingBudget) {
-          // Update existing budget if amount changed
           if (existingBudget.limit_amount !== budgetAmount) {
-            console.log(`⬆️ Updating budget for ${category.name}: ${existingBudget.limit_amount} → ${budgetAmount}`)
-            return budgetAPI.update(
-              existingBudget.id,
-              { limit_amount: budgetAmount },
-              token
-            )
-          } else {
-            console.log(`⏭️ Skipping ${category.name} - no change`)
+            return {
+              type: 'update' as const,
+              category,
+              budgetAmount,
+              existingBudget,
+              fn: () => budgetAPI.update(existingBudget.id, { limit_amount: budgetAmount }, token)
+            }
           }
         } else if (budgetAmount > 0) {
-          // Create new budget only if amount is greater than 0
-          console.log(`➕ Creating new budget for ${category.name}: ${budgetAmount}`)
-          return budgetAPI.create(
-            {
+          return {
+            type: 'create' as const,
+            category,
+            budgetAmount,
+            fn: () => budgetAPI.create({
               category_id: category.id,
               limit_amount: budgetAmount,
               period: 'monthly',
               alert_threshold: 0.8,
-            },
-            token
-          )
-        } else {
-          console.log(`⏭️ Skipping ${category.name} - amount is 0`)
+            }, token)
+          }
         }
+        return null
       })
+      .filter(Boolean)
 
-      const results = await Promise.all(promises)
-      console.log('✅ Save completed. Results:', results)
-
-      // Refresh data after save
-      console.log('🔄 Refreshing budget data...')
-      await fetchBudgetData(token)
-
-      alert("Đã lưu cài đặt ngân sách!")
-    } catch (err) {
-      console.error('❌ Save failed:', err)
-      setError(getErrorMessage(err))
-      alert("Có lỗi xảy ra khi lưu ngân sách: " + getErrorMessage(err))
-    } finally {
-      setIsSaving(false)
+    if (requests.length === 0) {
+      addToast({
+        title: "Không có thay đổi",
+        description: "Không có ngân sách nào được cập nhật",
+        variant: "default",
+      })
+      return
     }
+
+    setIsSaving(true)
+
+    // Show persistent loading toast
+    const loadingToastId = `budget-save-${Date.now()}`
+    addToast({
+      id: loadingToastId,
+      title: "Đang lưu...",
+      description: `Đang cập nhật ${requests.length} ngân sách`,
+      variant: "default",
+      duration: 0, // Don't auto-dismiss - persist across pages
+    })
+
+    // Execute API calls in parallel
+    Promise.all(requests.map(req => req!.fn()))
+      .then(async () => {
+        console.log('✅ Save completed')
+
+        // Refresh data
+        await refreshBudgets()
+
+        // Update toast to success
+        updateToast(loadingToastId, {
+          title: "Đã lưu!",
+          description: `Đã cập nhật ${requests.length} ngân sách thành công`,
+          variant: "success",
+          duration: 3000, // Auto-dismiss after 3s
+        })
+      })
+      .catch((err) => {
+        console.error('❌ Save failed:', err)
+
+        // Update toast to error
+        updateToast(loadingToastId, {
+          title: "Lỗi",
+          description: getErrorMessage(err),
+          variant: "error",
+          duration: 5000, // Auto-dismiss after 5s
+        })
+      })
+      .finally(() => {
+        setIsSaving(false)
+      })
   }
 
-  const totalBudget = Object.values(budgets).reduce((sum, budget) => sum + budget, 0)
+  const totalBudget = Object.values(budgetAmounts).reduce((sum, budget) => sum + budget, 0)
 
   // Loading state
   if (isLoading) {
@@ -204,40 +170,42 @@ export function BudgetSettings() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto max-w-4xl px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Link href="/dashboard">
-                <Button variant="ghost" size="sm">
-                  <ArrowLeft className="h-4 w-4" />
-                </Button>
-              </Link>
+      <header className="sticky top-0 z-50 border-b border-border bg-card">
+        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 flex-1 min-w-0">
               <div>
                 <h1 className="text-2xl font-bold text-foreground">Cài đặt ngân sách</h1>
                 <p className="text-sm text-muted-foreground">Thiết lập ngân sách hàng tháng cho từng danh mục</p>
               </div>
             </div>
-            <Button onClick={handleSave} disabled={isSaving}>
-              {isSaving ? (
-                <span className="animate-spin mr-2">⏳</span>
-              ) : (
-                <Save className="mr-2 h-4 w-4" />
-              )}
-              {isSaving ? "Đang lưu..." : "Lưu thay đổi"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Link href="/dashboard">
+                <Button variant="outline" size="sm">
+                  <Home className="mr-2 h-4 w-4" />
+                  Dashboard
+                </Button>
+              </Link>
+              <Link href="/chat">
+                <Button variant="outline" size="sm">
+                  <MessageSquare className="mr-2 h-4 w-4" />
+                  Chat AI
+                </Button>
+              </Link>
+              <Button onClick={handleSave} disabled={isSaving}>
+                {isSaving ? (
+                  <span className="animate-spin mr-2">⏳</span>
+                ) : (
+                  <Save className="mr-2 h-4 w-4" />
+                )}
+                {isSaving ? "Đang lưu..." : "Lưu thay đổi"}
+              </Button>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
-        {error && (
-          <Card className="mb-8 p-4 bg-destructive/10 text-destructive">
-            <p>Lỗi: {error}</p>
-            <Button variant="link" onClick={() => token && fetchBudgetData(token)}>Thử lại</Button>
-          </Card>
-        )}
-
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {/* Total Budget Summary */}
         <Card className="mb-8 p-6">
           <div className="flex items-center justify-between">
@@ -285,14 +253,14 @@ export function BudgetSettings() {
                       <Input
                         id={category.id}
                         type="text"
-                        value={formatCurrency(budgets[category.id] || 0).replace("đ", "")}
+                        value={formatCurrency(budgetAmounts[category.id] || 0).replace("đ", "")}
                         onChange={(e) => handleBudgetChange(category.id, e.target.value)}
                         className="pr-8"
                       />
                       <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">đ</span>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {calculatePercentage(budgets[category.id] || 0, totalBudget).toFixed(1)}% tổng ngân sách
+                      {calculatePercentage(budgetAmounts[category.id] || 0, totalBudget).toFixed(1)}% tổng ngân sách
                     </p>
                   </div>
                 </div>

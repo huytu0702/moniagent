@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -10,10 +10,10 @@ import { CategoryCard } from "./category-card"
 import { ExpenseChart } from "./expense-chart"
 import { RecentTransactions } from "./recent-transaction"
 import { authStorage } from "@/lib/auth"
-import { categoryAPI, budgetAPI, expenseAPI } from "@/lib/api"
-import { Category, Expense } from "@/lib/api/types"
+import { Category } from "@/lib/api/types"
 import { getErrorMessage } from "@/lib/error-handler"
 import { formatCurrency, calculatePercentage } from "@/lib/utils"
+import { useAppData } from "@/contexts/app-context"
 
 // Create a merged data structure for rendering
 interface CategoryWithBudget extends Category {
@@ -26,120 +26,63 @@ interface CategoryWithBudget extends Category {
 
 export function ExpenseDashboard() {
   const router = useRouter()
-  const [token, setToken] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState("")
-  const [categories, setCategories] = useState<CategoryWithBudget[]>([])
-  const [expenses, setExpenses] = useState<Expense[]>([])
-  
+  const { categories: rawCategories, budgets, expenses, isLoading, error: contextError, refreshData } = useAppData()
+  const [localError, setLocalError] = useState("")
+
   // Format current month for display
   const currentDate = new Date();
   const selectedMonth = `Tháng ${currentDate.getMonth() + 1}, ${currentDate.getFullYear()}`;
 
+  // Check authentication
   useEffect(() => {
-    let isMounted = true
-    const controller = new AbortController()
-    
-    const loadData = async () => {
-      const accessToken = authStorage.getToken()
-      if (!accessToken) {
-        router.push("/login")
-        return
-      }
-      
-      if (!isMounted) return
-      setToken(accessToken)
-      
-      // Fetch data with abort signal
-      setIsLoading(true)
-      setError("")
-      try {
-        const [categoriesRes, budgets, expensesData] = await Promise.all([
-          categoryAPI.list(accessToken),
-          budgetAPI.list(accessToken),
-          expenseAPI.list(accessToken),
-        ])
-
-        if (!isMounted) return
-
-        // Calculate spent amount per category from expenses
-        const spentByCategory = expensesData.reduce((acc, expense) => {
-          acc[expense.category_id] = (acc[expense.category_id] || 0) + expense.amount
-          return acc
-        }, {} as Record<string, number>)
-
-        // Create budget map for quick lookup
-        const budgetByCategory = budgets.reduce((acc, budget) => {
-          acc[budget.category_id] = budget.limit_amount
-          return acc
-        }, {} as Record<string, number>)
-
-        // Merge categories with budget and spent data
-        const mergedData: CategoryWithBudget[] = (categoriesRes?.categories || []).map(cat => ({
-          ...cat,
-          spent: spentByCategory[cat.id] || 0,
-          budget: budgetByCategory[cat.id] || 0,
-          icon: cat.icon || "📝",
-          color: cat.color || "#cccccc",
-        }))
-
-        setCategories(mergedData)
-        setExpenses(expensesData)
-      } catch (err) {
-        if (isMounted) {
-          setError(getErrorMessage(err))
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false)
-        }
-      }
+    const accessToken = authStorage.getToken()
+    if (!accessToken) {
+      router.push("/login")
     }
+  }, [router])
 
-    loadData()
+  // Merge categories with budget and spent data using useMemo
+  const categories = useMemo(() => {
+    // Calculate spent amount per category from expenses
+    const spentByCategory = expenses.reduce((acc, expense) => {
+      acc[expense.category_id] = (acc[expense.category_id] || 0) + expense.amount
+      return acc
+    }, {} as Record<string, number>)
+
+    // Create budget map for quick lookup
+    const budgetByCategory = budgets.reduce((acc, budget) => {
+      acc[budget.category_id] = budget.limit_amount
+      return acc
+    }, {} as Record<string, number>)
+
+    // Merge categories with budget and spent data
+    return rawCategories.map(cat => ({
+      ...cat,
+      spent: spentByCategory[cat.id] || 0,
+      budget: budgetByCategory[cat.id] || 0,
+      icon: cat.icon || "📝",
+      color: cat.color || "#cccccc",
+    })) as CategoryWithBudget[]
+  }, [rawCategories, budgets, expenses])
+
+  const error = contextError || localError
+
+  // Original useEffect cleanup
+  useEffect(() => {
+    const controller = new AbortController()
 
     return () => {
-      isMounted = false
       controller.abort()
     }
-  }, [])
+  }, [router])
 
   // Refetch function for retry button
   const refetchData = async () => {
-    if (!token) return
-    setIsLoading(true)
-    setError("")
     try {
-      const [categoriesRes, budgets, expensesData] = await Promise.all([
-        categoryAPI.list(token),
-        budgetAPI.list(token),
-        expenseAPI.list(token),
-      ])
-
-      const spentByCategory = expensesData.reduce((acc, expense) => {
-        acc[expense.category_id] = (acc[expense.category_id] || 0) + expense.amount
-        return acc
-      }, {} as Record<string, number>)
-
-      const budgetByCategory = budgets.reduce((acc, budget) => {
-        acc[budget.category_id] = budget.limit_amount
-        return acc
-      }, {} as Record<string, number>)
-
-      const mergedData: CategoryWithBudget[] = (categoriesRes?.categories || []).map(cat => ({
-        ...cat,
-        spent: spentByCategory[cat.id] || 0,
-        budget: budgetByCategory[cat.id] || 0,
-        icon: cat.icon || "📝",
-        color: cat.color || "#cccccc",
-      }))
-
-      setCategories(mergedData)
-      setExpenses(expensesData)
+      setLocalError("")
+      await refreshData()
     } catch (err) {
-      setError(getErrorMessage(err))
-    } finally {
-      setIsLoading(false)
+      setLocalError(getErrorMessage(err))
     }
   }
 
@@ -168,7 +111,7 @@ export function ExpenseDashboard() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-border bg-card">
+      <header className="sticky top-0 z-50 border-b border-border bg-card">
         <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between">
             <div>
@@ -188,7 +131,7 @@ export function ExpenseDashboard() {
                   Chat AI
                 </Button>
               </Link>
-              
+
             </div>
           </div>
         </div>
@@ -261,7 +204,7 @@ export function ExpenseDashboard() {
         <div className="mb-8">
           <h2 className="mb-4 text-xl font-semibold text-foreground">Danh mục chi tiêu</h2>
           {categories.length === 0 ? (
-             <p className="text-muted-foreground text-center py-8">Chưa có danh mục nào</p>
+            <p className="text-muted-foreground text-center py-8">Chưa có danh mục nào</p>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {categories.map((category) => (

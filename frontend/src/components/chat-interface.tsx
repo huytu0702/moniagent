@@ -4,12 +4,13 @@ import { useState, useEffect, useRef } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { ArrowLeft, Send, Sparkles, AlertCircle, Image as ImageIcon, X } from "lucide-react"
+import { ArrowLeft, Send, Sparkles, AlertCircle, Image as ImageIcon, X, Home, Settings } from "lucide-react"
 import Link from "next/link"
 import { chatAPI } from "@/lib/api"
 import { authStorage } from "@/lib/auth"
 import { useRouter } from "next/navigation"
 import { getErrorMessage, logError } from "@/lib/error-handler"
+import { useAppData } from "@/contexts/app-context"
 
 interface Message {
   id: string
@@ -39,6 +40,7 @@ interface Message {
 
 export function ChatInterface() {
   const router = useRouter()
+  const { refreshExpenses } = useAppData()
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
@@ -48,7 +50,8 @@ export function ChatInterface() {
   const [selectedImage, setSelectedImage] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
   // Track pending confirmation state for multi-turn flow
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     savedExpense: {
@@ -70,7 +73,7 @@ export function ChatInterface() {
         router.push("/login")
         return
       }
-      
+
       if (!isMounted) return
       setToken(accessToken)
 
@@ -79,9 +82,9 @@ export function ChatInterface() {
           { session_title: "Chat Session - " + new Date().toLocaleString("vi-VN") },
           accessToken
         )
-        
+
         if (!isMounted) return
-        
+
         setSessionId(response.session_id)
         setMessages([
           {
@@ -106,6 +109,15 @@ export function ChatInterface() {
     }
   }, [])
 
+  // Auto-scroll to bottom when messages change
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages])
+
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -123,7 +135,7 @@ export function ChatInterface() {
     }
 
     setSelectedImage(file)
-    
+
     // Create preview
     const reader = new FileReader()
     reader.onloadend = () => {
@@ -166,18 +178,18 @@ export function ChatInterface() {
     try {
       // Determine if this is a confirmation response
       const isConfirmationResponse = pendingConfirmation.isWaiting && pendingConfirmation.savedExpense !== null
-      
+
       const response = await chatAPI.sendMessage(
         sessionId,
-        { 
-          content: messageContent, 
+        {
+          content: messageContent,
           message_type: "text",
           is_confirmation_response: isConfirmationResponse,
           saved_expense: isConfirmationResponse ? pendingConfirmation.savedExpense : undefined,
         },
         token
       )
-      
+
       // Clear pending confirmation after sending
       if (isConfirmationResponse) {
         setPendingConfirmation({ savedExpense: null, isWaiting: false })
@@ -208,7 +220,7 @@ export function ChatInterface() {
       }
 
       setMessages((prev) => [...prev, aiMessage])
-      
+
       // Track confirmation state for multi-turn flow
       // When interrupted=true or asking_confirmation=true, save the expense for next turn
       if ((response.interrupted || response.asking_confirmation) && response.saved_expense) {
@@ -216,6 +228,11 @@ export function ChatInterface() {
           savedExpense: response.saved_expense,
           isWaiting: true,
         })
+      }
+
+      // Refresh expenses if AI saved an expense
+      if (response.saved_expense) {
+        await refreshExpenses()
       }
     } catch (err: unknown) {
       logError(err, 'ChatInterface.handleSend')
@@ -242,7 +259,8 @@ export function ChatInterface() {
 
     const userMessageId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     const imageUrl = imagePreview || ""
-    
+    const imageFile = selectedImage
+
     const userMessage: Message = {
       id: userMessageId,
       role: "user",
@@ -254,25 +272,26 @@ export function ChatInterface() {
     setMessages((prev) => [...prev, userMessage])
     const messageContent = input || ""
     setInput("")
+
+    // Clear image preview immediately after adding to messages
+    handleRemoveImage()
+
     setIsLoading(true)
     setError("")
 
     try {
       // Determine if this is a confirmation response
       const isConfirmationResponse = pendingConfirmation.isWaiting && pendingConfirmation.savedExpense !== null
-      
+
       const response = await chatAPI.sendImageMessage(
         sessionId,
-        selectedImage,
+        imageFile,
         messageContent || undefined,
         isConfirmationResponse,
         isConfirmationResponse ? pendingConfirmation.savedExpense : undefined,
         token
       )
-      
-      // Clear image selection after sending
-      handleRemoveImage()
-      
+
       // Clear pending confirmation after sending
       if (isConfirmationResponse) {
         setPendingConfirmation({ savedExpense: null, isWaiting: false })
@@ -303,7 +322,7 @@ export function ChatInterface() {
       }
 
       setMessages((prev) => [...prev, aiMessage])
-      
+
       // Track confirmation state for multi-turn flow
       // When interrupted=true or asking_confirmation=true, save the expense for next turn
       if ((response.interrupted || response.asking_confirmation) && response.saved_expense) {
@@ -311,6 +330,11 @@ export function ChatInterface() {
           savedExpense: response.saved_expense,
           isWaiting: true,
         })
+      }
+
+      // Refresh expenses if AI saved an expense
+      if (response.saved_expense) {
+        await refreshExpenses()
       }
     } catch (err: unknown) {
       logError(err, 'ChatInterface.handleSendImage')
@@ -335,24 +359,31 @@ export function ChatInterface() {
   return (
     <div className="flex h-screen flex-col bg-background">
       {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto max-w-4xl px-4 py-4">
+      <header className="sticky top-0 z-50 border-b border-border bg-card">
+        <div className="mx-auto max-w-7xl px-4 py-4">
           <div className="flex items-center gap-4">
-            <Link href="/dashboard">
-              <Button variant="ghost" size="sm">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            </Link>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
                 <Sparkles className="h-5 w-5 text-primary" />
               </div>
-              <div>
-                <h1 className="font-semibold text-foreground">Trợ lý AI</h1>
-                <p className="text-xs text-muted-foreground">
-                  {sessionId ? "Đang hoạt động" : "Đang kết nối..."}
-                </p>
-              </div>
+              <h1 className="font-semibold text-foreground whitespace-nowrap overflow-hidden text-ellipsis">Trợ lý AI</h1>
+              <p className="text-xs text-muted-foreground ml-2 whitespace-nowrap">
+                {sessionId ? "Đang hoạt động" : "Đang kết nối..."}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link href="/dashboard">
+                <Button variant="outline" size="sm">
+                  <Home className="mr-2 h-4 w-4" />
+                  Dashboard
+                </Button>
+              </Link>
+              <Link href="/settings">
+                <Button variant="outline" size="sm">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Cài đặt ngân sách
+                </Button>
+              </Link>
             </div>
           </div>
         </div>
@@ -361,7 +392,7 @@ export function ChatInterface() {
       {/* Error Banner */}
       {error && (
         <div className="bg-destructive/10 border-b border-destructive/20">
-          <div className="mx-auto max-w-4xl px-4 py-2">
+          <div className="mx-auto max-w-7xl px-4 py-2">
             <div className="flex items-center gap-2 text-sm text-destructive">
               <AlertCircle className="h-4 w-4" />
               <span>{error}</span>
@@ -372,14 +403,13 @@ export function ChatInterface() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-4xl px-4 py-6">
+        <div className="mx-auto max-w-7xl px-4 py-6">
           <div className="space-y-6">
             {messages.map((message) => (
               <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                    message.role === "user" ? "bg-primary text-primary-foreground" : "bg-card border border-border"
-                  }`}
+                  className={`max-w-[80%] rounded-2xl px-4 py-3 ${message.role === "user" ? "bg-primary text-primary-foreground" : "bg-card border border-border"
+                    }`}
                 >
                   <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
 
@@ -443,7 +473,7 @@ export function ChatInterface() {
                 </div>
               </div>
             ))}
-            
+
             {/* Loading indicator */}
             {isLoading && (
               <div className="flex justify-start">
@@ -456,13 +486,15 @@ export function ChatInterface() {
                 </div>
               </div>
             )}
+            {/* Scroll anchor */}
+            <div ref={messagesEndRef} />
           </div>
         </div>
       </div>
 
       {/* Input */}
       <div className="border-t border-border bg-card">
-        <div className="mx-auto max-w-4xl px-4 py-4">
+        <div className="mx-auto max-w-7xl px-4 py-4">
           {/* Image Preview */}
           {imagePreview && (
             <div className="mb-3 relative inline-block">
@@ -483,7 +515,7 @@ export function ChatInterface() {
               </div>
             </div>
           )}
-          
+
           <div className="flex gap-2">
             <input
               type="file"
@@ -514,20 +546,20 @@ export function ChatInterface() {
               className="flex-1"
               disabled={isLoading || !sessionId}
             />
-            <Button 
-              onClick={handleSend} 
-              size="icon" 
+            <Button
+              onClick={handleSend}
+              size="icon"
               disabled={isLoading || !sessionId || (!input.trim() && !selectedImage)}
             >
               <Send className="h-4 w-4" />
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            {pendingConfirmation.isWaiting 
+            {pendingConfirmation.isWaiting
               ? "💬 Đang chờ bạn xác nhận chi tiêu... (nhắn 'ok' để lưu hoặc cho biết cần sửa gì)"
               : selectedImage
-              ? "📷 Ảnh đã được chọn. Nhấn gửi để xử lý hoặc thêm mô tả."
-              : "Bạn có thể nhập chi tiêu bằng văn bản hoặc gửi ảnh hóa đơn"
+                ? "📷 Ảnh đã được chọn. Nhấn gửi để xử lý hoặc thêm mô tả."
+                : "Bạn có thể nhập chi tiêu bằng văn bản hoặc gửi ảnh hóa đơn"
             }
           </p>
         </div>
