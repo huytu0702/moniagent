@@ -63,8 +63,12 @@ class ExpenseProcessingService:
             import re
 
             # Enhanced amount extraction for Vietnamese formats
-            # Match patterns: 25k, 25K, 25,000đ, 25.000đ, 25000đ, 25000, $25, etc.
+            # Match patterns: 25k, 25K, 25,000đ, 25.000đ, 25000đ, 25000, $25, 2 triệu, 500 nghìn, etc.
             amount_patterns = [
+                # Vietnamese word-based units (must be first to catch before generic patterns)
+                r"(\d+(?:[,\.]\d+)?)\s*(?:triệu|tr)(?:\s|$|đ)",  # 2 triệu, 2.5 triệu, 2tr
+                r"(\d+(?:[,\.]\d{3})*)\s*(?:nghìn|ngàn|ng)(?:\s|$|đ)",  # 500 nghìn, 500 ngàn
+                # Symbol-based units
                 r"(\d+(?:[,\.]\d{3})*)\s*(?:k|K)(?!\w)",  # 25k, 25.000k, 25,000K
                 r"(\d+(?:[,\.]\d{3})*)\s*(?:đ|vnd|VND|₫)",  # 25,000đ, 25000đ
                 r"\$\s*(\d+(?:[,\.]\d{3})*(?:\.\d{2})?)",  # $25, $25.00
@@ -90,27 +94,47 @@ class ExpenseProcessingService:
                         "chi",
                         "trả",
                         "tiền",
+                        "triệu",
+                        "tr",
+                        "nghìn",
+                        "ngàn",
                     ]
                 ) or re.search(r"\d", line):
                     # Try each pattern
-                    for pattern in amount_patterns:
-                        matches = re.findall(pattern, line)
+                    for idx, pattern in enumerate(amount_patterns):
+                        matches = re.findall(pattern, line, re.IGNORECASE)
                         if matches:
                             try:
                                 parsed = []
                                 for match in matches:
                                     # Clean the matched string
                                     cleaned = match.replace(",", "").replace(".", "")
-                                    if cleaned.isdigit():
+                                    
+                                    # Handle decimal numbers like "2.5 triệu"
+                                    if "." in match or "," in match:
+                                        # Check if it's a decimal (like 2.5) or thousand separator (like 2.000)
+                                        if re.match(r"^\d+[.,]\d{1,2}$", match):
+                                            # It's a decimal like 2.5 or 2,5
+                                            cleaned = match.replace(",", ".")
+                                            amount = float(cleaned)
+                                        else:
+                                            # It's a thousand separator like 25.000 or 25,000
+                                            cleaned = match.replace(",", "").replace(".", "")
+                                            amount = float(cleaned)
+                                    elif cleaned.isdigit():
                                         amount = float(cleaned)
+                                    else:
+                                        continue
 
-                                        # Check if this is a "k" format in original line
-                                        if re.search(
-                                            rf"{re.escape(match)}\s*[kK](?!\w)", line
-                                        ):
-                                            amount *= 1000  # 25k = 25,000
+                                    # Apply multiplier based on pattern index
+                                    if idx == 0:  # triệu pattern
+                                        amount *= 1_000_000
+                                    elif idx == 1:  # nghìn/ngàn pattern
+                                        amount *= 1_000
+                                    elif idx == 2:  # k pattern
+                                        amount *= 1_000
 
-                                        parsed.append(amount)
+                                    parsed.append(amount)
 
                                 if parsed:
                                     expense_data["amount"] = parsed[0]
