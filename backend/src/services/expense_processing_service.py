@@ -139,60 +139,59 @@ class ExpenseProcessingService:
                     )
                     # Continue without merchant_name
 
-            # Auto-categorize using LLM if user_id provided
-            # Categorize even without merchant_name - use description
+            # Auto-categorize if user_id provided
+            # Priority: 1. Keyword rules (learned from user) 2. LLM
             if user_id and (
-                expense_data.get("merchant_name") or expense_data.get("description")
+                expense_data.get("merchant_name") or expense_data.get("description") or text
             ):
                 try:
-                    merchant_or_desc = expense_data.get(
-                        "merchant_name"
-                    ) or expense_data.get("description", "")
-                    logger.info(
-                        f"Attempting to categorize expense from '{merchant_or_desc}' using LLM for user {user_id}"
+                    # FIRST: Try keyword rules (includes learned rules from user corrections)
+                    # This is prioritized because user-learned rules are more accurate
+                    categorized_by_rules = self._categorize_with_keywords(
+                        user_id, expense_data, original_text=text
                     )
-
-                    # Import AIAgentService to use LLM categorization
-                    # Note: We need to pass db_session to AIAgentService
-                    if self.db_session:
-                        from src.services.ai_agent_service import AIAgentService
-
-                        ai_service = AIAgentService(self.db_session)
-                        category_id, confidence = (
-                            ai_service.categorize_expense_with_llm(
-                                user_id=user_id,
-                                merchant_name=expense_data.get("merchant_name") or "",
-                                description=expense_data.get("description") or text,
-                                amount=expense_data.get("amount", 0),
-                            )
+                    
+                    if categorized_by_rules:
+                        logger.info(
+                            f"Categorized by keyword rules: {expense_data.get('category_id')}"
+                        )
+                    else:
+                        # SECOND: Fallback to LLM if no rules match
+                        merchant_or_desc = expense_data.get(
+                            "merchant_name"
+                        ) or expense_data.get("description", "")
+                        logger.info(
+                            f"No keyword rules matched, attempting LLM categorization for '{merchant_or_desc}'"
                         )
 
-                        if category_id:
-                            expense_data["category_id"] = category_id
-                            expense_data["suggested_category_id"] = category_id
-                            expense_data["categorization_confidence"] = (
-                                confidence or 0.8
+                        if self.db_session:
+                            from src.services.ai_agent_service import AIAgentService
+
+                            ai_service = AIAgentService(self.db_session)
+                            category_id, confidence = (
+                                ai_service.categorize_expense_with_llm(
+                                    user_id=user_id,
+                                    merchant_name=expense_data.get("merchant_name") or "",
+                                    description=expense_data.get("description") or text,
+                                    amount=expense_data.get("amount", 0),
+                                )
                             )
-                            logger.info(
-                                f"LLM categorized expense to {category_id} with confidence {confidence}"
-                            )
-                        else:
-                            # Fallback to keyword rules if LLM fails
-                            logger.warning(
-                                "LLM categorization returned None, falling back to keyword rules"
-                            )
-                            self._categorize_with_keywords(user_id, expense_data)
-                    else:
-                        logger.warning("No DB session available for LLM categorization")
-                        self._categorize_with_keywords(user_id, expense_data)
+
+                            if category_id:
+                                expense_data["category_id"] = category_id
+                                expense_data["suggested_category_id"] = category_id
+                                expense_data["categorization_confidence"] = (
+                                    confidence or 0.8
+                                )
+                                logger.info(
+                                    f"LLM categorized expense to {category_id} with confidence {confidence}"
+                                )
 
                 except Exception as e:
                     # Don't fail extraction if categorization fails
                     logger.warning(
                         f"Auto-categorization failed (non-blocking): {str(e)}"
                     )
-                    # Fallback to keyword rules
-                    self._categorize_with_keywords(user_id, expense_data)
 
             return expense_data
 
@@ -288,21 +287,42 @@ Chỉ trả về JSON, không có markdown."""
             return None
 
     def _categorize_with_keywords(
-        self, user_id: str, expense_data: Dict[str, Any]
-    ) -> None:
+        self, user_id: str, expense_data: Dict[str, Any], original_text: str = ""
+    ) -> bool:
         """
-        Fallback categorization using keyword rules when LLM fails
+        Categorization using keyword rules (includes user-learned rules)
+        
+        Priority order for matching:
+        1. merchant_name
+        2. description  
+        3. original_text (user's input)
 
         Args:
             user_id: User ID
             expense_data: Expense data dictionary to update with category
+            original_text: Original user input text
+            
+        Returns:
+            True if categorization was successful, False otherwise
         """
         try:
             if not self.db_session:
-                return
+                return False
+
+            # Build list of texts to try matching
+            texts_to_match = []
+            if expense_data.get("merchant_name"):
+                texts_to_match.append(expense_data.get("merchant_name"))
+            if expense_data.get("description"):
+                texts_to_match.append(expense_data.get("description"))
+            if original_text:
+                texts_to_match.append(original_text)
+                
+            if not texts_to_match:
+                return False
 
             logger.info(
-                f"Using keyword-based categorization for '{expense_data.get('merchant_name')}'"
+                f"Checking keyword rules for texts: {texts_to_match}"
             )
 
             categorization_service = CategorizationService()
@@ -321,34 +341,40 @@ Chỉ trả về JSON, không có markdown."""
                 .all()
             )
 
-            if rules:
-                # Try to match rules against merchant name
-                best_match = None
-                best_confidence = 0.0
+            if not rules:
+                logger.debug(f"No categorization rules found for user {user_id}")
+                return False
 
-                for rule in rules:
-                    confidence = categorization_service._match_rule_for_text(
-                        expense_data.get("merchant_name"), rule
-                    )
+            # Try to match rules against all text sources
+            best_match = None
+            best_confidence = 0.0
+
+            for rule in rules:
+                for text in texts_to_match:
+                    if not text:
+                        continue
+                    confidence = categorization_service._match_rule_for_text(text, rule)
                     if confidence > best_confidence:
                         best_confidence = confidence
                         best_match = rule
 
-                # If we found a good match, add category suggestion
-                if best_match and best_confidence >= best_match.confidence_threshold:
-                    expense_data["category_id"] = best_match.category_id
-                    expense_data["suggested_category_id"] = best_match.category_id
-                    expense_data["categorization_confidence"] = best_confidence
-                    logger.info(
-                        f"Keyword categorized to {best_match.category_id} with confidence {best_confidence}"
-                    )
-            else:
-                logger.debug(f"No categorization rules found for user {user_id}")
+            # If we found a good match, add category suggestion
+            if best_match and best_confidence >= best_match.confidence_threshold:
+                expense_data["category_id"] = best_match.category_id
+                expense_data["suggested_category_id"] = best_match.category_id
+                expense_data["categorization_confidence"] = best_confidence
+                logger.info(
+                    f"Keyword rule matched: '{best_match.store_name_pattern}' -> category {best_match.category_id} (confidence: {best_confidence})"
+                )
+                return True
+            
+            return False
 
         except Exception as e:
             logger.warning(
-                f"Keyword categorization fallback failed (non-blocking): {str(e)}"
+                f"Keyword categorization failed (non-blocking): {str(e)}"
             )
+            return False
 
     def extract_expense_from_image(
         self, image_data, user_id: Optional[str] = None
@@ -495,16 +521,25 @@ Chỉ trả về JSON, không có markdown."""
             if not self.db_session:
                 raise ValueError("Database session not available")
 
+            # Handle date - default to current date if not provided
+            expense_date = None
+            date_value = expense_data.get("date")
+            if date_value and date_value not in ["Hôm nay", "hôm nay", None, ""]:
+                try:
+                    expense_date = datetime.fromisoformat(date_value)
+                except (ValueError, TypeError):
+                    # If date parsing fails, use current date
+                    expense_date = datetime.utcnow()
+            else:
+                # Default to current date
+                expense_date = datetime.utcnow()
+
             # Create expense record
             expense = Expense(
                 user_id=user_id,
                 merchant_name=expense_data.get("merchant_name"),
                 amount=expense_data.get("amount"),
-                date=(
-                    datetime.fromisoformat(expense_data["date"])
-                    if expense_data.get("date")
-                    else None
-                ),
+                date=expense_date,
                 category_id=category_id,
                 description=expense_data.get("description"),
                 confirmed_by_user=False,
@@ -905,6 +940,9 @@ Chỉ trả về JSON, không có markdown."""
         """
         Store corrections for future learning (User Story 2 requirement)
 
+        Now uses CategoryLearningService to automatically create categorization rules
+        when a user corrects a category assignment.
+
         Args:
             expense_id: Expense ID
             user_id: User ID
@@ -912,6 +950,7 @@ Chỉ trả về JSON, không có markdown."""
         """
         try:
             from src.models.categorization_feedback import CategorizationFeedback
+            from src.services.category_learning_service import CategoryLearningService
 
             # Get the expense to access its category
             expense = self.db_session.query(Expense).filter_by(id=expense_id).first()
@@ -919,19 +958,42 @@ Chỉ trả về JSON, không có markdown."""
                 logger.warning(f"Expense {expense_id} not found for learning storage")
                 return
 
-            # Store feedback for corrections
-            # Note: The current CategorizationFeedback model is designed for category feedback
-            # For now, we'll store corrections using the existing model structure
-            # Future enhancement: Create a dedicated ExpenseCorrection model
+            # Check if category was corrected
+            category_correction = None
+            original_category_id = None
+            for record in correction_records:
+                if record.get("field") == "category_id":
+                    category_correction = record
+                    original_category_id = record.get("old_value")
+                    break
 
+            # If category was corrected, use CategoryLearningService for auto-learning
+            if category_correction and expense.category_id:
+                try:
+                    learning_service = CategoryLearningService(self.db_session)
+                    learning_result = learning_service.learn_from_correction(
+                        user_id=user_id,
+                        expense_id=expense_id,
+                        corrected_category_id=expense.category_id,
+                        original_category_id=original_category_id,
+                    )
+                    logger.info(
+                        f"Auto-learned from category correction: {learning_result.get('message', 'Success')}"
+                    )
+                except Exception as learning_error:
+                    logger.warning(
+                        f"Category learning failed (non-blocking): {str(learning_error)}"
+                    )
+
+            # Store feedback for corrections (existing behavior)
             if expense.category_id:
                 feedback = CategorizationFeedback(
                     expense_id=expense_id,
                     user_id=user_id,
                     feedback_type="correction",
-                    suggested_category_id=expense.category_id,  # Use current category
-                    confirmed_category_id=expense.category_id,  # Same after correction
-                    confidence_score=0.0,  # Will be enhanced in future
+                    suggested_category_id=original_category_id or expense.category_id,
+                    confirmed_category_id=expense.category_id,
+                    confidence_score=0.0,
                 )
                 self.db_session.add(feedback)
                 self.db_session.commit()

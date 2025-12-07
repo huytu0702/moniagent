@@ -38,6 +38,7 @@ class AgentState(TypedDict):
     # Expense extraction
     extracted_expense: Dict
     saved_expense: Dict
+    original_category_id: str  # Track original category for learning
 
     # Confirmation flow
     asking_confirmation: bool
@@ -179,12 +180,30 @@ class LangGraphAIAgent:
                 if category:
                     category_name = category.name
 
+            # Handle date - default to today if not provided
+            from datetime import datetime
+            expense_date = expense_data.get("date")
+            
+            if expense_date:
+                # Already has a date string - convert to friendly format
+                try:
+                    dt = datetime.fromisoformat(expense_date)
+                    display_date = dt.strftime("%d/%m/%Y")  # 07/12/2025
+                except (ValueError, TypeError):
+                    display_date = expense_date
+            else:
+                # Set actual date for saving and display
+                now = datetime.utcnow()
+                expense_data["date"] = now.strftime("%Y-%m-%d")  # For saving
+                display_date = now.strftime("%d/%m/%Y")  # For display: 07/12/2025
+
             # Prepare pending expense (NOT saved yet)
             pending_expense = {
                 "id": None,  # No ID yet - not saved
                 "merchant_name": expense_data.get("merchant_name") or "Không xác định",
                 "amount": expense_data.get("amount"),
-                "date": expense_data.get("date") or "Hôm nay",
+                "date": display_date,  # Display friendly text
+                "actual_date": expense_data.get("date"),  # Actual date for saving
                 "category_id": category_id,
                 "category_name": category_name or "Chưa phân loại",
             }
@@ -192,6 +211,7 @@ class LangGraphAIAgent:
             return {
                 "extracted_expense": expense_data,
                 "saved_expense": pending_expense,  # Using same field but not saved yet
+                "original_category_id": category_id,  # Track for learning
                 "asking_confirmation": True,
                 "awaiting_user_response": True,
             }
@@ -539,6 +559,24 @@ Chỉ trả về JSON, không có markdown."""
             }
 
         # Update pending expense with corrections (NO DB save yet)
+        # Handle date display format
+        from datetime import datetime
+        raw_date = corrections.get("date", saved_expense.get("date"))
+        display_date = raw_date
+        
+        if raw_date:
+            try:
+                # Try to parse and format to DD/MM/YYYY
+                dt = datetime.fromisoformat(raw_date)
+                display_date = dt.strftime("%d/%m/%Y")
+            except (ValueError, TypeError):
+                # Keep as-is if already formatted or invalid
+                display_date = raw_date
+        else:
+            # Default to today
+            now = datetime.utcnow()
+            display_date = now.strftime("%d/%m/%Y")
+
         updated_pending_expense = {
             "id": None,  # Still not saved
             "merchant_name": corrections.get(
@@ -546,7 +584,7 @@ Chỉ trả về JSON, không có markdown."""
             )
             or "Không xác định",
             "amount": corrections.get("amount", saved_expense.get("amount")),
-            "date": corrections.get("date", saved_expense.get("date")) or "Hôm nay",
+            "date": display_date,
             "category_id": saved_expense.get("category_id"),
             "category_name": saved_expense.get("category_name") or "Chưa phân loại",
         }
@@ -607,6 +645,7 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
         expense_data = state.get("extracted_expense", {})
         user_id = state["user_id"]
         saved_expense = state.get("saved_expense", {})
+        original_category_id = state.get("original_category_id")
 
         if not expense_data:
             return {
@@ -622,6 +661,41 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
                 source_type="text",
             )
 
+            # Check if category was changed/added by user - trigger learning
+            # Learn if: 
+            # 1. User changed category (original != final)
+            # 2. User added category when there was none (original is None, final exists)
+            final_category_id = expense_data.get("category_id") or saved_expense.get("category_id")
+            category_was_changed = (
+                final_category_id is not None 
+                and (
+                    original_category_id is None  # User added category
+                    or str(original_category_id) != str(final_category_id)  # User changed category
+                )
+            )
+
+            learning_message = ""
+            if category_was_changed:
+                try:
+                    from src.services.category_learning_service import CategoryLearningService
+                    
+                    learning_service = CategoryLearningService(self.db_session)
+                    learning_result = learning_service.learn_from_correction(
+                        user_id=user_id,
+                        expense_id=str(expense.id),
+                        corrected_category_id=str(final_category_id),
+                        original_category_id=str(original_category_id) if original_category_id else None,
+                    )
+                    
+                    if learning_result and learning_result.get("keywords_learned"):
+                        keywords = learning_result.get("keywords_learned", [])
+                        logger.info(
+                            f"Learned from category correction: {keywords} -> {saved_expense.get('category_name')}"
+                        )
+                        learning_message = "\n📚 Tôi đã ghi nhớ để lần sau phân loại chính xác hơn!"
+                except Exception as learning_error:
+                    logger.warning(f"Category learning failed (non-blocking): {str(learning_error)}")
+
             # Build confirmation message
             response_parts = ["✅ Đã lưu chi tiêu vào hệ thống:"]
             response_parts.append(
@@ -634,6 +708,10 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
             response_parts.append(
                 f"   • Danh mục: {saved_expense.get('category_name', 'Chưa phân loại')}"
             )
+
+            # Add learning message if category was changed
+            if learning_message:
+                response_parts.append(learning_message)
 
             # Add budget warning if applicable
             if budget_warning:

@@ -7,7 +7,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from src.models.expense import Expense
-from src.core.ai_config import get_gemini_model
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
 
 
 logger = logging.getLogger(__name__)
@@ -26,10 +27,19 @@ class FinancialAdviceService:
 
     def __init__(self):
         try:
-            self.ai_client = get_gemini_model()
+            # Use ChatGoogleGenerativeAI following existing codebase pattern
+            self.ai_client = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash", temperature=0.3
+            )
+            # Use lite model for simple analysis
+            self.lite_client = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash-lite", temperature=0.1
+            )
+            logger.info("FinancialAdviceService initialized with Gemini AI clients")
         except Exception as e:
             logger.warning(f"Failed to initialize AI client: {str(e)}")
             self.ai_client = None
+            self.lite_client = None
 
     def get_financial_advice(
         self,
@@ -129,7 +139,9 @@ class FinancialAdviceService:
                 for expense in expenses:
                     analysis["total_spending"] += expense.amount
                     # Use category name (string), not Category object
-                    category_name = expense.category.name if expense.category else "Uncategorized"
+                    category_name = (
+                        expense.category.name if expense.category else "Uncategorized"
+                    )
                     if category_name not in analysis["by_category"]:
                         analysis["by_category"][category_name] = 0.0
                     analysis["by_category"][category_name] += expense.amount
@@ -240,7 +252,7 @@ class FinancialAdviceService:
 
     def _determine_spending_pattern(self, analysis: Dict[str, Any]) -> str:
         """
-        Determine spending pattern based on analysis
+        Determine spending pattern based on analysis (Vietnam context)
 
         Args:
             analysis: Spending analysis dictionary
@@ -252,13 +264,15 @@ class FinancialAdviceService:
             total = analysis.get("total_spending", 0)
             average_daily = analysis.get("average_daily", 0)
 
+            # Vietnam context: Adjusted thresholds based on local economy
+            # Assuming amounts are in VND
             if total == 0:
                 return "low"
-            elif average_daily < 30:
+            elif average_daily < 200000:  # < 200k VND/day (~$8)
                 return "low"
-            elif average_daily < 50:
+            elif average_daily < 400000:  # < 400k VND/day (~$16)
                 return "normal"
-            elif average_daily < 75:
+            elif average_daily < 700000:  # < 700k VND/day (~$28)
                 return "above_average"
             else:
                 return "high"
@@ -284,23 +298,34 @@ class FinancialAdviceService:
         """
         categories_str = ", ".join(
             [
-                f"{cat}: ${amount:.2f}"
+                f"{cat}: {amount:,.0f}đ"
                 for cat, amount in analysis.get("by_category", {}).items()
             ]
         )
 
-        prompt = f"""
-Based on the following spending analysis, provide specific financial advice:
+        prompt = f"""Bạn là chuyên gia tư vấn tài chính cá nhân tại Việt Nam. Dựa trên phân tích chi tiêu sau đây, hãy đưa ra lời khuyên tài chính cụ thể và thực tế:
 
-Period: {analysis.get('period', 'monthly')}
-Total Spending: ${analysis.get('total_spending', 0):.2f}
-Average Daily: ${analysis.get('average_daily', 0):.2f}
-Spending by Category: {categories_str}
-Spending Pattern: {pattern}
+**Phân tích chi tiêu:**
+- Kỳ: {analysis.get('period', 'monthly')}
+- Tổng chi tiêu: {analysis.get('total_spending', 0):,.0f}đ
+- Chi tiêu trung bình/ngày: {analysis.get('average_daily', 0):,.0f}đ
+- Chi tiêu theo danh mục: {categories_str}
+- Mức độ chi tiêu: {pattern}
 
-Provide 2-3 specific, actionable recommendations to improve financial habits.
-Focus on the highest spending categories and practical ways to reduce expenses.
-"""
+**Yêu cầu:**
+1. Phân tích thói quen chi tiêu của người dùng
+2. Đưa ra 2-3 lời khuyên cụ thể, khả thi cho người Việt Nam
+3. Tập trung vào danh mục chi tiêu cao nhất và cách giảm chi tiêu thực tế
+4. Cân nhắc bối cảnh kinh tế và lối sống tại Việt Nam
+5. Đưa ra gợi ý tiết kiệm phù hợp với thu nhập trung bình
+
+**Hướng dẫn:**
+- Nếu chi tiêu ăn uống cao: gợi ý tự nấu ăn, meal prep, giảm ăn ngoài
+- Nếu chi tiêu đi lại cao: gợi ý sử dụng xe buýt, xe đạp, carpooling
+- Nếu chi tiêu mua sắm cao: gợi ý lập danh sách, so sánh giá, chờ đợt sale
+- Nếu chi tiêu giải trí cao: gợi ý các hoạt động miễn phí, giảm tần suất
+
+Trả lời bằng tiếng Việt, giọng văn thân thiện, chuyên gia và thực tế trong nhiều nhất 5 câu."""
         return prompt
 
     def _call_ai_api(self, prompt: str) -> str:
@@ -317,9 +342,12 @@ Focus on the highest spending categories and practical ways to reduce expenses.
             if not self.ai_client:
                 raise FinancialAdviceServiceError("AI client not available")
 
-            # Call AI API (this would use gemini-2.5-flash or similar)
-            # For now, return mock response
-            return "Based on your spending patterns, I recommend focusing on reducing discretionary spending in your top categories. Consider meal planning to reduce dining out expenses and using public transportation more frequently."
+            # Call AI API using LangChain pattern
+            response = self.ai_client.invoke([HumanMessage(content=prompt)])
+            advice_text = response.content.strip()
+
+            logger.info(f"Generated AI advice: {advice_text[:100]}...")
+            return advice_text
 
         except Exception as e:
             logger.error(f"Error calling AI API: {str(e)}")
@@ -340,16 +368,16 @@ Focus on the highest spending categories and practical ways to reduce expenses.
         Returns:
             Default advice string
         """
-        top_category = analysis.get("top_category", "your expenses")
+        top_category = analysis.get("top_category", "chi tiêu của bạn")
 
         if pattern == "high":
-            return f"Your spending on {top_category} is notably high. Consider setting stricter budget limits and exploring alternatives to reduce expenses in this category."
+            return f"Chi tiêu của bạn ở danh mục {top_category} đang khá cao. Bạn nên đặt giới hạn ngân sách nghiêm ngặt hơn và tìm kiếm các phương án thay thế để giảm chi tiêu trong danh mục này."
         elif pattern == "above_average":
-            return f"Your spending on {top_category} is above average. Look for opportunities to optimize in this category to improve your financial health."
+            return f"Chi tiêu của bạn ở danh mục {top_category} cao hơn trung bình. Hãy tìm cơ hội để tối ưu hóa danh mục này nhằm cải thiện sức khỏe tài chính."
         elif pattern == "normal":
-            return f"Your spending pattern is healthy overall. Continue monitoring {top_category} and maintain your current financial discipline."
+            return f"Mức chi tiêu của bạn khá lành mạnh. Tiếp tục theo dõi {top_category} và duy trì kỷ luật tài chính hiện tại."
         else:
-            return "Maintain your current spending habits and continue to track your expenses regularly for better financial awareness."
+            return "Duy trì thói quen chi tiêu hiện tại và tiếp tục theo dõi chi tiêu thường xuyên để nâng cao nhận thức tài chính."
 
     def _extract_recommendations(self, advice_text: str) -> List[str]:
         """
@@ -370,17 +398,50 @@ Focus on the highest spending categories and practical ways to reduce expenses.
             for line in lines:
                 line = line.strip()
                 if line and (
-                    line[0].isdigit() or line.startswith("-") or line.startswith("•")
+                    line[0].isdigit()
+                    or line.startswith("-")
+                    or line.startswith("•")
+                    or line.startswith("*")
                 ):
                     # Remove numbering or bullets
-                    recommendation = line.lstrip("0123456789.-•").strip()
-                    if recommendation:
+                    recommendation = line.lstrip("0123456789.-•*").strip()
+                    if (
+                        recommendation and len(recommendation) > 5
+                    ):  # Filter out very short lines
                         recommendations.append(recommendation)
 
-            # If no bullet points found, split into sentences and take first 3
+            # If no bullet points found, try to extract using AI for better parsing
+            if not recommendations and self.lite_client:
+                try:
+                    extract_prompt = f"""Từ đoạn lời khuyên tài chính sau, hãy trích xuất 3 gợi ý cụ thể nhất:
+
+"{advice_text}"
+
+Trả về JSON format (không markdown):
+{{
+  "recommendations": [
+    "Gợi ý 1",
+    "Gợi ý 2", 
+    "Gợi ý 3"
+  ]
+}}"""
+
+                    response = self.lite_client.invoke(
+                        [HumanMessage(content=extract_prompt)]
+                    )
+                    import json
+
+                    result = json.loads(response.content.strip())
+                    recommendations = result.get("recommendations", [])
+                except Exception as extract_error:
+                    logger.warning(f"AI extraction failed: {str(extract_error)}")
+
+            # If still no recommendations, split into sentences and take first 3
             if not recommendations:
                 sentences = [
-                    s.strip() + "." for s in advice_text.split(".") if s.strip()
+                    s.strip() + "."
+                    for s in advice_text.split(".")
+                    if s.strip() and len(s.strip()) > 10
                 ]
                 recommendations = sentences[:3]
 
@@ -389,7 +450,7 @@ Focus on the highest spending categories and practical ways to reduce expenses.
         except Exception as e:
             logger.error(f"Error extracting recommendations: {str(e)}")
             return [
-                "Monitor your spending regularly",
-                "Set budget limits for each category",
-                "Review and adjust monthly",
+                "Theo dõi chi tiêu thường xuyên",
+                "Đặt giới hạn ngân sách cho từng danh mục",
+                "Xem xét và điều chỉnh hàng tháng",
             ]

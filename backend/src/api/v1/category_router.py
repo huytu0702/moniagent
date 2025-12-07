@@ -362,3 +362,82 @@ async def initialize_vietnamese_categories(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to initialize categories: {str(e)}",
         )
+
+
+@router.get("/learning/statistics", response_model=dict)
+async def get_learning_statistics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get learning statistics for the current user.
+    
+    Shows how many rules the agent has learned from user corrections,
+    including total rules, active rules, feedback count, and learning rate.
+    
+    This helps users understand how the agent is adapting to their
+    categorization preferences over time.
+    """
+    try:
+        from src.services.category_learning_service import CategoryLearningService
+
+        learning_service = CategoryLearningService(db)
+        statistics = learning_service.get_learning_statistics(
+            user_id=str(current_user.id),
+            db_session=db,
+        )
+
+        return {
+            "status": "success",
+            **statistics,
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting learning statistics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get learning statistics: {str(e)}",
+        )
+
+
+@router.get("/learning/rules", response_model=dict)
+async def get_user_learned_rules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all categorization rules for the current user.
+    
+    Returns a list of all keyword → category mappings that the agent
+    uses for automatic expense categorization. This includes both
+    system-defined rules and rules learned from user corrections.
+    """
+    try:
+        service = CategoryService()
+        rules = service.get_user_rules(
+            user_id=str(current_user.id),
+            db_session=db,
+        )
+
+        # Group rules by category for easier viewing
+        rules_by_category = {}
+        for rule in rules:
+            category_id = rule.get("category_id")
+            if category_id not in rules_by_category:
+                rules_by_category[category_id] = []
+            rules_by_category[category_id].append(rule)
+
+        return {
+            "status": "success",
+            "total_rules": len(rules),
+            "rules": rules,
+            "rules_by_category": rules_by_category,
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting user rules: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get rules: {str(e)}",
+        )
+

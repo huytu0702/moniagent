@@ -1,5 +1,10 @@
 """
 Categorization service for expense categorization
+
+This service now includes auto-learning capabilities:
+- Learns from user corrections to improve future suggestions
+- Automatically creates categorization rules from corrections
+- Uses feedback history to enhance category suggestions
 """
 
 import logging
@@ -34,7 +39,13 @@ class CategorizationService:
         self, user_id: str, expense_id: str, db_session: Session = None
     ) -> Dict[str, Any]:
         """
-        Suggest a category for an expense based on stored rules and patterns
+        Suggest a category for an expense based on stored rules, patterns,
+        and learned feedback history.
+
+        The suggestion priority is:
+        1. Matching against user's categorization rules
+        2. Checking feedback history for similar corrections
+        3. Default suggestion
 
         Args:
             user_id: ID of the user who owns the expense
@@ -78,10 +89,6 @@ class CategorizationService:
                 .all()
             )
 
-            if not rules:
-                logger.debug(f"No categorization rules found for user {user_id}")
-                return self._get_default_suggestion(user_id, expense, db_session)
-
             # Try to match the expense description against rules
             best_match = None
             best_confidence = 0.0
@@ -106,9 +113,18 @@ class CategorizationService:
                         "suggested_category_name": category.name,
                         "confidence_score": best_confidence,
                         "reason": f"Matched with '{best_match.store_name_pattern}' rule",
+                        "source": "categorization_rule",
                     }
-                    logger.debug(f"Category suggestion successful: {result}")
+                    logger.debug(f"Category suggestion from rule: {result}")
                     return result
+
+            # Fallback: Check feedback history for similar past corrections
+            history_suggestion = self._get_suggestion_from_feedback_history(
+                user_id, expense, db_session
+            )
+            if history_suggestion:
+                logger.debug(f"Category suggestion from history: {history_suggestion}")
+                return history_suggestion
 
             return self._get_default_suggestion(user_id, expense, db_session)
 
@@ -117,6 +133,39 @@ class CategorizationService:
         except Exception as e:
             logger.error(f"Error suggesting category for expense: {str(e)}")
             raise CategorizationServiceError(f"Error suggesting category: {str(e)}")
+
+    def _get_suggestion_from_feedback_history(
+        self, user_id: str, expense: Expense, db_session: Session
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get category suggestion based on similar past corrections.
+        This enables the agent to learn from user corrections.
+
+        Args:
+            user_id: ID of the user
+            expense: Expense object to find similar corrections for
+            db_session: Database session
+
+        Returns:
+            Dictionary with suggested category or None
+        """
+        try:
+            from src.services.category_learning_service import CategoryLearningService
+
+            learning_service = CategoryLearningService(db_session)
+            text = f"{expense.description or ''} {expense.merchant_name or ''}"
+
+            suggestion = learning_service.get_suggestion_from_history(
+                user_id=user_id,
+                text=text,
+                db_session=db_session,
+            )
+
+            return suggestion
+
+        except Exception as e:
+            logger.warning(f"Error getting suggestion from history: {str(e)}")
+            return None
 
     def _match_rule(self, expense: Expense, rule: ExpenseCategorizationRule) -> float:
         """
@@ -246,9 +295,13 @@ class CategorizationService:
         category_id: str,
         suggested_category_id: Optional[str] = None,
         db_session: Session = None,
+        auto_learn: bool = True,
     ) -> Dict[str, Any]:
         """
-        Confirm or correct the categorization for an expense
+        Confirm or correct the categorization for an expense.
+        
+        When user corrects a category (different from suggested), the system
+        automatically learns from this correction by creating new rules.
 
         Args:
             user_id: ID of the user
@@ -256,9 +309,10 @@ class CategorizationService:
             category_id: ID of the confirmed category
             suggested_category_id: ID of the suggested category (if different)
             db_session: Database session
+            auto_learn: Whether to automatically learn from corrections (default: True)
 
         Returns:
-            Dictionary with confirmation details
+            Dictionary with confirmation details and learning results
         """
         try:
             logger.info(f"Confirming categorization for expense {expense_id}")
@@ -292,8 +346,15 @@ class CategorizationService:
                     f"Category {category_id} not found or not owned by user"
                 )
 
+            # Determine if this is a correction
+            is_correction = (
+                suggested_category_id is not None
+                and suggested_category_id != category_id
+            )
+
             # Update expense category
-            expense.category = category_id
+            expense.category_id = category_id
+            expense.confirmed_by_user = True
 
             # Create feedback record
             feedback = CategorizationFeedback(
@@ -301,11 +362,7 @@ class CategorizationService:
                 expense_id=expense_id,
                 suggested_category_id=suggested_category_id,
                 confirmed_category_id=category_id,
-                feedback_type=(
-                    "correction"
-                    if suggested_category_id and suggested_category_id != category_id
-                    else "confirmation"
-                ),
+                feedback_type="correction" if is_correction else "confirmation",
             )
 
             db_session.add(feedback)
@@ -317,7 +374,24 @@ class CategorizationService:
                 "category_name": category.name,
                 "confidence_score": None,
                 "is_user_confirmed": True,
+                "was_correction": is_correction,
             }
+
+            # Auto-learn from corrections
+            learning_result = None
+            if is_correction and auto_learn:
+                learning_result = self._learn_from_correction(
+                    user_id=user_id,
+                    expense_id=expense_id,
+                    corrected_category_id=category_id,
+                    original_category_id=suggested_category_id,
+                    db_session=db_session,
+                )
+                if learning_result:
+                    result["learning"] = learning_result
+                    logger.info(
+                        f"Auto-learned from correction: {learning_result.get('message', '')}"
+                    )
 
             logger.info(f"Categorization confirmed: {result}")
             return result
@@ -329,6 +403,49 @@ class CategorizationService:
             raise CategorizationServiceError(
                 f"Error confirming categorization: {str(e)}"
             )
+
+    def _learn_from_correction(
+        self,
+        user_id: str,
+        expense_id: str,
+        corrected_category_id: str,
+        original_category_id: Optional[str],
+        db_session: Session,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Learn from a category correction by creating new categorization rules.
+        
+        This enables the agent to remember user preferences and automatically
+        categorize similar expenses correctly in the future.
+
+        Args:
+            user_id: User ID
+            expense_id: Expense ID
+            corrected_category_id: The correct category selected by user
+            original_category_id: Original suggested category
+            db_session: Database session
+
+        Returns:
+            Dictionary with learning results or None
+        """
+        try:
+            from src.services.category_learning_service import CategoryLearningService
+
+            learning_service = CategoryLearningService(db_session)
+
+            result = learning_service.learn_from_correction(
+                user_id=user_id,
+                expense_id=expense_id,
+                corrected_category_id=corrected_category_id,
+                original_category_id=original_category_id,
+            )
+
+            return result
+
+        except Exception as e:
+            # Don't fail the whole operation if learning fails
+            logger.warning(f"Failed to learn from correction: {str(e)}")
+            return None
 
     def get_categorization_feedback(
         self, user_id: str, expense_id: str, db_session: Session = None
