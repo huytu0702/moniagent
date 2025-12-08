@@ -336,7 +336,7 @@ Lời khuyên cần:
 - Phù hợp với bối cảnh Việt Nam
 - Tích cực và khích lệ người dùng
 
-Trả lời bằng văn xuôi tự nhiên, KHÔNG dùng format markdown hoặc bullet points trong phần lời khuyên chính."""
+Trả lời bằng format markdown trong phần lời khuyên chính."""
         return prompt
 
     def _call_ai_api(self, prompt: str) -> str:

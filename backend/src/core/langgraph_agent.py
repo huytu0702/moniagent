@@ -305,16 +305,16 @@ class LangGraphAIAgent:
         )
         expense_summary = f"""Tôi đã trích xuất được thông tin chi tiêu sau:
 
-📌 **Thông tin chi tiêu:**
-   • Cửa hàng: {saved_expense.get('merchant_name', 'Không xác định')}
-   • Số tiền: {saved_expense.get('amount', 0):,.0f}đ
-   • Ngày: {saved_expense.get('date', 'Hôm nay')}
-   • Danh mục: {category_display}
+**Thông tin chi tiêu:**
+- Cửa hàng: {saved_expense.get('merchant_name', 'Không xác định')}
+- Số tiền: {saved_expense.get('amount', 0):,.0f}đ
+- Ngày: {saved_expense.get('date', 'Hôm nay')}
+- Danh mục: {category_display}
 
 Bạn muốn làm gì tiếp theo?
-   • Nhắn 'lưu' hoặc 'ok' để xác nhận và lưu
-   • Nhắn 'sửa' và cho tôi biết cần sửa gì (ví dụ: "sửa số tiền thành 50000")
-   • Nhắn 'hủy' hoặc 'không' để bỏ qua chi tiêu này"""
+- Nhắn 'lưu' hoặc 'ok' để xác nhận và lưu
+- Nhắn 'sửa' và cho tôi biết cần sửa gì (ví dụ: "sửa số tiền thành 50000")
+- Nhắn 'hủy' hoặc 'không' để bỏ qua chi tiêu này"""
 
         # Create confirmation payload for interrupt
         confirmation_payload = {
@@ -701,16 +701,16 @@ Chỉ trả về JSON, không có markdown."""
         )
         response_message = f"""Tôi đã cập nhật thông tin chi tiêu:
 
-📌 **Thông tin chi tiêu (đã sửa):**
-   • Cửa hàng: {updated_pending_expense.get('merchant_name', 'Không xác định')}
-   • Số tiền: {updated_pending_expense.get('amount', 0):,.0f}đ
-   • Ngày: {updated_pending_expense.get('date', 'Hôm nay')}
-   • Danh mục: {category_display}
+**Thông tin chi tiêu (đã sửa):**
+- Cửa hàng: {updated_pending_expense.get('merchant_name', 'Không xác định')}
+- Số tiền: {updated_pending_expense.get('amount', 0):,.0f}đ
+- Ngày: {updated_pending_expense.get('date', 'Hôm nay')}
+- Danh mục: {category_display}
 
 Bạn muốn làm gì tiếp theo?
-   • Nhắn 'lưu' hoặc 'ok' để xác nhận và lưu
-   • Nhắn 'sửa' và cho tôi biết cần sửa gì (ví dụ: "sửa số tiền thành 50000")
-   • Nhắn 'hủy' hoặc 'không' để bỏ qua chi tiêu này"""
+- Nhắn 'lưu' hoặc 'ok' để xác nhận và lưu
+- Nhắn 'sửa' và cho tôi biết cần sửa gì (ví dụ: "sửa số tiền thành 50000")
+- Nhắn 'hủy' hoặc 'không' để bỏ qua chi tiêu này"""
 
         return {
             "messages": [AIMessage(content=response_message.strip())],

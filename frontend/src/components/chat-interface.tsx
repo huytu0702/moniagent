@@ -11,6 +11,8 @@ import { authStorage } from "@/lib/auth"
 import { useRouter } from "next/navigation"
 import { getErrorMessage, logError } from "@/lib/error-handler"
 import { useAppData } from "@/contexts/app-context"
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface Message {
   id: string
@@ -411,7 +413,29 @@ export function ChatInterface() {
                   className={`max-w-[80%] rounded-2xl px-4 py-3 ${message.role === "user" ? "bg-primary text-primary-foreground" : "bg-card border border-border"
                     }`}
                 >
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+                  {message.role === "assistant" ? (
+                    <div className="prose prose-sm dark:prose-invert max-w-none">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          // Custom styling for markdown elements
+                          p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
+                          ul: ({ node, ...props }) => <ul className="list-disc list-inside mb-2 space-y-1" {...props} />,
+                          ol: ({ node, ...props }) => <ol className="list-decimal list-inside mb-2 space-y-1" {...props} />,
+                          li: ({ node, ...props }) => <li className="text-sm" {...props} />,
+                          strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,
+                          em: ({ node, ...props }) => <em className="italic" {...props} />,
+                          h1: ({ node, ...props }) => <h1 className="text-lg font-bold mb-2" {...props} />,
+                          h2: ({ node, ...props }) => <h2 className="text-base font-semibold mb-2" {...props} />,
+                          h3: ({ node, ...props }) => <h3 className="text-sm font-semibold mb-1" {...props} />,
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+                  )}
 
                   {/* Image Preview */}
                   {message.imageUrl && (
