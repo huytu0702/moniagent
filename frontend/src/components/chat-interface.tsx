@@ -431,12 +431,8 @@ export function ChatInterface() {
                     </div>
                   )}
 
-                  {/* Financial Advice */}
-                  {message.advice && (
-                    <div className="mt-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                      <p className="text-xs text-blue-600 dark:text-blue-400">💡 {message.advice}</p>
-                    </div>
-                  )}
+                  {/* Financial Advice - Removed as it's already in message content */}
+
 
                   {/* Saved Expense (only show when asking for confirmation, not after update) */}
                   {message.savedExpense && (message.askingConfirmation || message.interrupted) && (

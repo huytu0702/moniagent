@@ -226,11 +226,12 @@ class FinancialAdviceService:
                 )
 
             # Parse recommendations from advice
-            recommendations = self._extract_recommendations(advice_text)
+            # Don't include recommendations separately as they're already in advice text
+            # recommendations = self._extract_recommendations(advice_text)
 
             return {
                 "advice": advice_text,
-                "recommendations": recommendations,
+                "recommendations": [],  # Empty to avoid duplicate UI rendering
                 "spending_pattern": spending_pattern,
                 "period": spending_analysis.get("period", "monthly"),
                 "top_spending_category": spending_analysis.get("top_category"),
@@ -242,11 +243,7 @@ class FinancialAdviceService:
             # Return default advice
             return {
                 "advice": "Track your spending regularly and set budget limits for each category.",
-                "recommendations": [
-                    "Monitor your expenses weekly",
-                    "Set realistic budget goals",
-                    "Review and adjust spending habits monthly",
-                ],
+                "recommendations": [],  # Empty to avoid duplicate UI rendering
                 "spending_pattern": "normal",
                 "period": spending_analysis.get("period", "monthly"),
                 "top_spending_category": spending_analysis.get("top_category"),
