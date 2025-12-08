@@ -447,10 +447,10 @@ class BudgetManagementService:
                     else "medium" if warning else "none"
                 ),
                 "message": (
-                    f"You have exceeded your budget for {category_name}!"
+                    f"Bạn đã vượt quá ngân sách cho danh mục {category_name}!"
                     if percentage_used >= 1.0
                     else (
-                        f"You are approaching your budget limit for {category_name}."
+                        f"Bạn đang tiến gần đến ngân sách cho danh mục {category_name}."
                         if warning
                         else None
                     )

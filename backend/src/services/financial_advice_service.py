@@ -68,6 +68,9 @@ class FinancialAdviceService:
 
             # Generate advice using AI
             advice_result = self._generate_ai_advice(user_id, spending_analysis)
+            
+            # Include spending analysis in the result
+            advice_result["spending_analysis"] = spending_analysis
 
             return advice_result
 
@@ -302,30 +305,41 @@ class FinancialAdviceService:
                 for cat, amount in analysis.get("by_category", {}).items()
             ]
         )
+        
+        period_label = {
+            "daily": "ngày",
+            "weekly": "tuần này",
+            "monthly": "tháng này"
+        }.get(analysis.get("period", "monthly"), "tháng này")
 
-        prompt = f"""Bạn là chuyên gia tư vấn tài chính cá nhân tại Việt Nam. Dựa trên phân tích chi tiêu sau đây, hãy đưa ra lời khuyên tài chính cụ thể và thực tế:
+        prompt = f"""Bạn là chuyên gia tư vấn tài chính cá nhân tại Việt Nam. Người dùng đã yêu cầu lời khuyên về chi tiêu của họ.
 
-**Phân tích chi tiêu:**
-- Kỳ: {analysis.get('period', 'monthly')}
+**Phân tích chi tiêu {period_label}:**
 - Tổng chi tiêu: {analysis.get('total_spending', 0):,.0f}đ
-- Chi tiêu trung bình/ngày: {analysis.get('average_daily', 0):,.0f}đ
-- Chi tiêu theo danh mục: {categories_str}
+- Chi tiêu trung bình/ngày: {analysis.get('average_daily', 0):,.0f}đ  
+- Chi tiêu theo danh mục: {categories_str if categories_str else "Chưa có dữ liệu"}
 - Mức độ chi tiêu: {pattern}
 
-**Yêu cầu:**
-1. Phân tích thói quen chi tiêu của người dùng
-2. Đưa ra 2-3 lời khuyên cụ thể, khả thi cho người Việt Nam
-3. Tập trung vào danh mục chi tiêu cao nhất và cách giảm chi tiêu thực tế
-4. Cân nhắc bối cảnh kinh tế và lối sống tại Việt Nam
-5. Đưa ra gợi ý tiết kiệm phù hợp với thu nhập trung bình
+**Yêu cầu lời khuyên toàn diện:**
+1. Đánh giá tổng quan về thói quen chi tiêu
+2. Phân tích chi tiêu theo từng danh mục chính
+3. Những điểm tốt và cần cải thiện
+4. Khuyến nghị cụ thể và thực tế để quản lý chi tiêu tốt hơn  
+5. Mục tiêu ngắn hạn nếu phù hợp
 
-**Hướng dẫn:**
+**Hướng dẫn chi tiết:**
 - Nếu chi tiêu ăn uống cao: gợi ý tự nấu ăn, meal prep, giảm ăn ngoài
 - Nếu chi tiêu đi lại cao: gợi ý sử dụng xe buýt, xe đạp, carpooling
 - Nếu chi tiêu mua sắm cao: gợi ý lập danh sách, so sánh giá, chờ đợt sale
 - Nếu chi tiêu giải trí cao: gợi ý các hoạt động miễn phí, giảm tần suất
 
-Trả lời bằng tiếng Việt, giọng văn thân thiện, chuyên gia và thực tế trong nhiều nhất 5 câu."""
+Lời khuyên cần:
+- Thân thiện, dễ hiểu, bằng tiếng Việt
+- Cụ thể và có thể thực hiện được
+- Phù hợp với bối cảnh Việt Nam
+- Tích cực và khích lệ người dùng
+
+Trả lời bằng văn xuôi tự nhiên, KHÔNG dùng format markdown hoặc bullet points trong phần lời khuyên chính."""
         return prompt
 
     def _call_ai_api(self, prompt: str) -> str:
@@ -342,8 +356,11 @@ Trả lời bằng tiếng Việt, giọng văn thân thiện, chuyên gia và t
             if not self.ai_client:
                 raise FinancialAdviceServiceError("AI client not available")
 
-            # Call AI API using LangChain pattern
-            response = self.ai_client.invoke([HumanMessage(content=prompt)])
+            # Call AI API using LangChain pattern with max_tokens for comprehensive advice
+            response = self.ai_client.invoke(
+                [HumanMessage(content=prompt)],
+                max_tokens=2000  # Allow longer, more detailed advice
+            )
             advice_text = response.content.strip()
 
             logger.info(f"Generated AI advice: {advice_text[:100]}...")

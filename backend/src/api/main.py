@@ -22,7 +22,7 @@ app = FastAPI(
 
 # CORS configuration - restrict in production
 ALLOWED_ORIGINS = [
-    "http://localhost:3002",
+    "http://localhost:3000",
     "http://localhost:8000",
     "https://app.moniagent.com",
 ]

@@ -49,9 +49,14 @@ class AgentState(TypedDict):
     wants_update: bool  # Whether user wants to update expense
     corrections: Dict  # Corrections to apply
 
+    # Cancellation flow
+    user_wants_cancel: bool  # Whether user wants to cancel the expense
+
     # Budget & Advice
     budget_warning: Dict
     financial_advice: Dict
+    requesting_advice: bool  # Whether user is requesting spending advice
+    advice_period: str  # Time period for advice: daily, weekly, monthly
 
 
 class ExpenseExtractionTool(BaseModel):
@@ -123,6 +128,55 @@ class LangGraphAIAgent:
         # Build graph with checkpointer
         self.graph = self._build_graph()
 
+    def _detect_advice_request(self, user_message: str) -> Dict[str, Any]:
+        """Detect if user is requesting spending advice (not reporting an expense)
+        
+        Args:
+            user_message: User's message text
+            
+        Returns:
+            Dictionary with requesting_advice (bool) and advice_period (str)
+        """
+        if not user_message:
+            return {"requesting_advice": False, "advice_period": "monthly"}
+        
+        user_message_lower = user_message.lower()
+        
+        # Keywords indicating advice request
+        advice_keywords = [
+            "lời khuyên",
+            "khuyên",
+            "tư vấn",
+            "báo cáo chi tiêu",
+            "phân tích chi tiêu",
+            "tổng kết chi tiêu",
+            "xem chi tiêu",
+            "kiểm tra chi tiêu",
+        ]
+        
+        # Check if user is asking for advice
+        is_advice_request = any(keyword in user_message_lower for keyword in advice_keywords)
+        
+        # If not clearly asking for advice, return False
+        if not is_advice_request:
+            return {"requesting_advice": False, "advice_period": "monthly"}
+        
+        # Extract time period from message
+        period = "monthly"  # default
+        
+        # Check for daily
+        if any(keyword in user_message_lower for keyword in ["hôm nay", "ngày", "daily", "hằng ngày"]):
+            period = "daily"
+        # Check for weekly
+        elif any(keyword in user_message_lower for keyword in ["tuần", "week", "weekly", "hằng tuần"]):
+            period = "weekly"
+        # Check for monthly (default)
+        elif any(keyword in user_message_lower for keyword in ["tháng", "month", "monthly", "hằng tháng"]):
+            period = "monthly"
+        
+        logger.info(f"Detected advice request with period: {period}")
+        return {"requesting_advice": True, "advice_period": period}
+
     def _extract_expense(self, state: AgentState) -> Dict:
         """Extract expense from user message using the service"""
         messages = state.get("messages", [])
@@ -133,6 +187,17 @@ class LangGraphAIAgent:
         message_type = state.get("message_type", "text")
         user_id = state.get("user_id")
         session_id = state.get("session_id")
+
+        # First, check if user is requesting advice instead of reporting expense
+        if message_type == "text":
+            advice_detection = self._detect_advice_request(user_message)
+            if advice_detection["requesting_advice"]:
+                logger.info(f"User requesting advice, skipping expense extraction")
+                return {
+                    "requesting_advice": True,
+                    "advice_period": advice_detection["advice_period"],
+                    "extracted_expense": None,
+                }
 
         # Get image_file from temporary storage (not serializable in state)
         image_file = self._image_files.get(session_id) if session_id else None
@@ -161,7 +226,7 @@ class LangGraphAIAgent:
                     user_id=user_id,  # Pass user_id for auto-categorization
                 )
 
-        return {"extracted_expense": extracted_expense}
+        return {"extracted_expense": extracted_expense, "requesting_advice": False}
 
     def _prepare_expense_for_confirmation(self, state: AgentState) -> Dict:
         """Prepare extracted expense for user confirmation (NO SAVE YET)"""
@@ -246,7 +311,10 @@ class LangGraphAIAgent:
    • Ngày: {saved_expense.get('date', 'Hôm nay')}
    • Danh mục: {category_display}
 
-Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặc cho tôi biết cần sửa gì)"""
+Bạn muốn làm gì tiếp theo?
+   • Nhắn 'lưu' hoặc 'ok' để xác nhận và lưu
+   • Nhắn 'sửa' và cho tôi biết cần sửa gì (ví dụ: "sửa số tiền thành 50000")
+   • Nhắn 'hủy' hoặc 'không' để bỏ qua chi tiêu này"""
 
         # Create confirmation payload for interrupt
         confirmation_payload = {
@@ -365,6 +433,15 @@ Chỉ trả về JSON, không có markdown."""
 
                 intent_data = json.loads(response_text)
 
+                # Check for cancellation intent first
+                if self._is_cancellation(user_message):
+                    logger.info("Detected cancellation intent from user message")
+                    return {
+                        "wants_update": False,
+                        "corrections": {},
+                        "user_wants_cancel": True,
+                    }
+
                 # Filter out null/None values from corrections
                 raw_corrections = intent_data.get("corrections", {})
                 corrections = {
@@ -382,6 +459,7 @@ Chỉ trả về JSON, không có markdown."""
                 return {
                     "wants_update": intent_data.get("wants_update", False),
                     "corrections": corrections,
+                    "user_wants_cancel": False,
                 }
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse intent response: {str(e)}")
@@ -629,7 +707,10 @@ Chỉ trả về JSON, không có markdown."""
    • Ngày: {updated_pending_expense.get('date', 'Hôm nay')}
    • Danh mục: {category_display}
 
-Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặc cho tôi biết cần sửa gì)"""
+Bạn muốn làm gì tiếp theo?
+   • Nhắn 'lưu' hoặc 'ok' để xác nhận và lưu
+   • Nhắn 'sửa' và cho tôi biết cần sửa gì (ví dụ: "sửa số tiền thành 50000")
+   • Nhắn 'hủy' hoặc 'không' để bỏ qua chi tiêu này"""
 
         return {
             "messages": [AIMessage(content=response_message.strip())],
@@ -750,15 +831,68 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
                 ]
             }
 
+    def _handle_cancel(self, state: AgentState) -> Dict:
+        """Handle when user wants to cancel/reject the expense"""
+        return {
+            "messages": [
+                AIMessage(
+                    content="Đã hủy. Tôi không lưu chi tiêu này. Bạn có thể nhập chi tiêu mới bất cứ lúc nào!"
+                )
+            ],
+            "extracted_expense": {},
+            "saved_expense": {},
+            "asking_confirmation": False,
+            "user_wants_cancel": False,
+        }
+
     def _generate_financial_advice(self, state: AgentState) -> Dict:
         """Generate financial advice based on user's spending"""
         user_id = state["user_id"]
+        # Get period from state if user requested advice, otherwise default to monthly
+        period = state.get("advice_period", "monthly")
 
         advice = self.advice_service.get_financial_advice(
-            user_id=user_id, period="monthly", db_session=self.db_session
+            user_id=user_id, period=period, db_session=self.db_session
         )
 
-        return {"financial_advice": advice}
+        # Format the response message
+        period_text = {
+            "daily": "hôm nay",
+            "weekly": "tuần này", 
+            "monthly": "tháng này"
+        }.get(period, "tháng này")
+        
+        # Build comprehensive response with advice
+        response_parts = [f"📊 **Phân tích chi tiêu {period_text}:**\n"]
+        
+        # Add spending summary
+        if advice.get("spending_analysis"):
+            analysis = advice["spending_analysis"]
+            response_parts.append(f"💰 Tổng chi tiêu: {analysis.get('total_spending', 0):,.0f}đ")
+            response_parts.append(f"📈 Trung bình mỗi ngày: {analysis.get('average_daily', 0):,.0f}đ\n")
+            
+            # Add category breakdown
+            if analysis.get("by_category"):
+                response_parts.append("📋 **Chi tiêu theo danh mục:**")
+                for category, amount in sorted(
+                    analysis["by_category"].items(), 
+                    key=lambda x: x[1], 
+                    reverse=True
+                ):
+                    response_parts.append(f"   • {category}: {amount:,.0f}đ")
+                response_parts.append("")
+        
+        # Add AI advice
+        if advice.get("advice"):
+            response_parts.append("💡 **Lời khuyên:**")
+            response_parts.append(advice["advice"])
+        
+        response_text = "\n".join(response_parts)
+        
+        return {
+            "financial_advice": advice,
+            "messages": [AIMessage(content=response_text)]
+        }
 
     def _call_model(self, state: AgentState) -> Dict:
         """Call the LLM model with current state"""
@@ -813,7 +947,8 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
         workflow.add_node("process_update", self._process_update)
         workflow.add_node(
             "save_expense", self._save_expense
-        )  # NEW: Actually saves to DB
+        )  # Actually saves to DB
+        workflow.add_node("handle_cancel", self._handle_cancel)  # Handle cancellation
         workflow.add_node("generate_advice", self._generate_financial_advice)
         workflow.add_node("llm_call", self._call_model)
 
@@ -824,7 +959,11 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
         workflow.add_conditional_edges(
             "extract_expense",
             self._route_after_extraction,
-            {"prepare_confirmation": "prepare_confirmation", "llm_call": "llm_call"},
+            {
+                "generate_advice": "generate_advice",  # Route for advice requests
+                "prepare_confirmation": "prepare_confirmation",
+                "llm_call": "llm_call"
+            },
         )
 
         # After preparing expense, go to ask_confirmation (no save yet)
@@ -837,6 +976,7 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
             {
                 "detect_update_intent": "detect_update_intent",
                 "save_expense": "save_expense",  # User confirmed → save
+                "handle_cancel": "handle_cancel",  # User wants to cancel
             },
         )
 
@@ -846,7 +986,8 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
             self._route_after_intent,
             {
                 "process_update": "process_update",
-                "save_expense": "save_expense",  # If no clear update, save anyway
+                "save_expense": "save_expense",
+                "handle_cancel": "handle_cancel",  # User wants to cancel
                 "llm_call": "llm_call",  # Fallback for unclear cases
             },
         )
@@ -866,6 +1007,8 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
         )
 
         workflow.add_edge("generate_advice", END)
+        
+        workflow.add_edge("handle_cancel", END)  # Cancellation ends the flow
 
         workflow.add_edge("llm_call", END)
 
@@ -874,6 +1017,13 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
 
     def _route_after_extraction(self, state: AgentState) -> str:
         """Route after expense extraction based on whether we have valid data"""
+        # Check if user is requesting advice (not reporting expense)
+        requesting_advice = state.get("requesting_advice", False)
+        if requesting_advice:
+            logger.info("User requesting advice, routing to generate_advice")
+            return "generate_advice"
+        
+        # Otherwise, check if we extracted a valid expense
         extracted_expense = state.get("extracted_expense", {})
 
         if extracted_expense and self.expense_service.validate_extracted_expense(
@@ -899,19 +1049,24 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
 
         logger.info(f"Routing after user response: '{user_response}'")
 
-        # Check if user confirms (wants to save)
+        # PRIORITY 1: Check cancellation FIRST
+        if self._is_cancellation(user_response):
+            logger.info("User wants to cancel, routing to handle_cancel")
+            return "handle_cancel"
+
+        # PRIORITY 2: Check if user confirms (wants to save)
         if self._is_simple_confirmation(user_response):
-            # User confirmed - go to save_expense
             logger.info("User confirmed, routing to save_expense")
             return "save_expense"
 
-        # User wants to make changes - detect intent
+        # PRIORITY 3: User wants to make changes - detect intent
         logger.info("User wants changes, routing to detect_update_intent")
         return "detect_update_intent"
 
     def _route_after_intent(self, state: AgentState) -> str:
         """Route after detecting update intent"""
         wants_update = state.get("wants_update", False)
+        user_wants_cancel = state.get("user_wants_cancel", False)
         corrections = state.get("corrections", {})
         user_response = state.get("user_confirmation_response", "")
 
@@ -925,10 +1080,15 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
                         break
 
         logger.info(
-            f"Routing after intent detection: wants_update={wants_update}, corrections={corrections}, user_response='{user_response}'"
+            f"Routing after intent detection: wants_update={wants_update}, user_wants_cancel={user_wants_cancel}, corrections={corrections}, user_response='{user_response}'"
         )
 
-        # If user wants update and we have corrections, process them
+        # PRIORITY 1: Check cancellation first
+        if user_wants_cancel:
+            logger.info("User wants to cancel, routing to handle_cancel")
+            return "handle_cancel"
+
+        # PRIORITY 2: If user wants update and we have corrections, process them
         if wants_update and corrections:
             logger.info("User wants update with corrections, routing to process_update")
             return "process_update"
@@ -945,8 +1105,13 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
                 )
                 return "process_update"
             else:
-                # LLM might have parsed wrong - check if it's actually a confirmation
-                if self._is_simple_confirmation(user_response):
+                # LLM might have parsed wrong - check if it's actually a confirmation or cancellation
+                if self._is_cancellation(user_response):
+                    logger.warning(
+                        f"LLM parsed as update but user response is cancellation. User message: {user_response}"
+                    )
+                    return "handle_cancel"
+                elif self._is_simple_confirmation(user_response):
                     logger.warning(
                         f"LLM parsed as update but user response is confirmation. User message: {user_response}"
                     )
@@ -957,7 +1122,13 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
             logger.info("User confirmed, routing to save_expense")
             return "save_expense"
 
-        # Fallback: if unclear, check if it's actually a confirmation
+        # Fallback: check if it's actually a cancellation or confirmation
+        if self._is_cancellation(user_response):
+            logger.info(
+                "Unclear intent but user response is cancellation, routing to handle_cancel"
+            )
+            return "handle_cancel"
+        
         if self._is_simple_confirmation(user_response):
             logger.info(
                 "Unclear intent but user response is confirmation, routing to save_expense"
@@ -975,9 +1146,14 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
         return "ask_confirmation"
 
     def _route_after_save(self, state: AgentState) -> str:
-        """Route after saving expense - check budget warning"""
+        """Route after saving expense - check if budget warning exists and is true"""
         budget_warning = state.get("budget_warning")
-        return "generate_advice" if budget_warning else "end"
+        # Check if budget_warning exists AND has actual warning
+        if budget_warning and budget_warning.get("warning"):
+            logger.info(f"Budget warning detected, routing to generate_advice: {budget_warning}")
+            return "generate_advice"
+        logger.info("No budget warning, ending flow")
+        return "end"
 
     def _normalize_date_format(self, date_str: str) -> str:
         """
@@ -1015,16 +1191,57 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
         logger.warning(f"Could not normalize date format: {date_str}")
         return date_str
 
-    def _is_simple_confirmation(self, user_response: str) -> bool:
-        """Check if user response is a simple confirmation (no changes)
-
-        Context: User was asked "Bạn có muốn thay đổi thông tin nào không?"
-        - "có" = yes, wants changes
-        - "không" = no, no changes needed
+    def _is_cancellation(self, user_response: str) -> bool:
+        """Check if user wants to CANCEL/REJECT the expense
+        
+        Returns True if user wants to discard/cancel the expense.
+        Priority check - should be checked BEFORE _is_simple_confirmation.
         """
         if not user_response:
-            logger.debug("Empty user response, treating as confirmation")
+            return False
+        
+        user_response_lower = user_response.lower().strip()
+        user_response_clean = re.sub(r'[.,!?;:]+$', '', user_response_lower).strip()
+        
+        logger.debug(f"Checking cancellation for: '{user_response}' (cleaned: '{user_response_clean}')")
+        
+        # Keywords indicating user wants to cancel/reject
+        cancellation_keywords = [
+            "không",
+            "hủy",
+            "bỏ",
+            "thôi",
+            "không muốn",
+            "không lưu",
+            "không cần",
+            "cancel",
+            "no",
+            "bỏ qua",
+        ]
+        
+        # Check exact match first (single word responses)
+        if user_response_clean in cancellation_keywords:
+            logger.debug(f"Exact match with cancellation keyword: '{user_response_clean}'")
             return True
+        
+        # Check if contains cancellation keyword
+        if any(kw in user_response_clean for kw in cancellation_keywords):
+            logger.debug(f"Found cancellation keyword in response")
+            return True
+        
+        return False
+
+    def _is_simple_confirmation(self, user_response: str) -> bool:
+        """Check if user wants to SAVE/CONFIRM the expense
+        
+        Returns True if user wants to save the expense as-is.
+        Should be checked AFTER _is_cancellation to avoid confusion.
+        
+        Note: "không" is NOT a confirmation in the new flow.
+        """
+        if not user_response:
+            logger.debug("Empty user response, NOT treating as confirmation")
+            return False
 
         user_response_lower = user_response.lower().strip()
         # Remove punctuation for better matching
@@ -1034,31 +1251,23 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
             f"Checking confirmation for: '{user_response}' (cleaned: '{user_response_clean}')"
         )
 
-        # Keywords indicating no changes wanted (user is satisfied)
+        # Keywords indicating user wants to SAVE (confirm)
         confirmation_keywords = [
-            "không",
-            "không có",
-            "không cần",
-            "không cần sửa",
-            "không cần thay đổi",
-            "giữ nguyên",
             "ok",
             "oke",
             "okay",
-            "được rồi",
-            "đúng rồi",
-            "đúng",
-            "ổn",
-            "tốt",
-            "xong",
             "lưu",
             "xác nhận",
             "đồng ý",
+            "được rồi",
+            "đúng rồi",
+            "ổn",
+            "yes",
         ]
 
         # Keywords indicating changes wanted (user wants to modify)
         change_keywords = [
-            "có",  # "có" means "yes" - wants to change
+            "có",
             "muốn",
             "sửa",
             "thay",
@@ -1076,28 +1285,19 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
             logger.debug(f"Found change keyword, not a confirmation")
             return False
 
-        # Check exact match first (for short responses like "ok")
-        if user_response_clean in [
-            "ok",
-            "oke",
-            "okay",
-            "đúng",
-            "ổn",
-            "tốt",
-            "xong",
-            "lưu",
-        ]:
+        # Check exact match first (for short responses like "ok", "lưu")
+        if user_response_clean in confirmation_keywords:
             logger.debug(f"Exact match with confirmation keyword")
             return True
 
-        # If contains confirmation keywords, it's a simple confirmation
+        # Check if contains confirmation keywords
         if any(kw in user_response_clean for kw in confirmation_keywords):
             logger.debug(f"Found confirmation keyword")
             return True
 
-        # Default: if unclear, assume user wants to make changes
+        # Default: if unclear, do NOT assume confirmation
         # Let the LLM detect the actual intent
-        logger.debug(f"No clear confirmation, treating as wanting changes")
+        logger.debug(f"No clear confirmation, NOT treating as confirmation")
         return False
 
     def run(
@@ -1135,9 +1335,12 @@ Bạn xác nhận thông tin trên đúng không? (Nhắn "ok" để lưu, hoặ
             "user_confirmation_response": "",
             "wants_update": False,
             "corrections": {},
+            "user_wants_cancel": False,
             "extracted_expense": {},
             "budget_warning": {},
             "financial_advice": {},
+            "requesting_advice": False,
+            "advice_period": "monthly",
         }
 
         result = self.graph.invoke(initial_state, config)
